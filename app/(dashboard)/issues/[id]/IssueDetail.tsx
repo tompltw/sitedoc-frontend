@@ -97,6 +97,51 @@ function AgentRoleBadge({ role }: { role: string }) {
   );
 }
 
+// ── Agent status indicator for Conversation header ────────────────────────
+
+const KANBAN_AGENT: Partial<Record<KanbanColumn, 'pm' | 'dev' | 'qa' | 'tech_lead'>> = {
+  triage: 'pm',
+  in_progress: 'dev',
+  in_qa: 'qa',
+};
+
+const AGENT_LABEL: Record<string, string> = {
+  pm: 'PM Agent',
+  dev: 'Dev Agent',
+  qa: 'QA Agent',
+  tech_lead: 'Tech Lead Agent',
+};
+
+function AgentStatusIndicator({
+  issue,
+  actions,
+}: {
+  issue: Issue;
+  actions: AgentAction[];
+}) {
+  const isWorking = actions.some((a) => a.status === 'in_progress');
+  const role = issue.kanban_column ? KANBAN_AGENT[issue.kanban_column] ?? null : null;
+  const isDone = issue.kanban_column === 'done' || issue.kanban_column === 'dismissed';
+
+  if (!role || isDone) return null;
+
+  return (
+    <div className="flex items-center gap-1.5">
+      <span
+        className={`w-2 h-2 rounded-full flex-shrink-0 ${
+          isWorking ? 'bg-green-400 animate-pulse' : 'bg-slate-500'
+        }`}
+      />
+      <span className="text-xs text-slate-400">
+        {AGENT_LABEL[role] ?? role}
+        <span className={`ml-1 ${isWorking ? 'text-green-400' : 'text-slate-500'}`}>
+          {isWorking ? '· working' : '· idle'}
+        </span>
+      </span>
+    </div>
+  );
+}
+
 interface Props {
   issue: Issue;
 }
@@ -564,8 +609,9 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* Chat */}
         <div className="bg-slate-800 border border-slate-700 rounded-xl flex flex-col h-[520px]">
-          <div className="px-5 py-3.5 border-b border-slate-700 flex-shrink-0">
+          <div className="px-5 py-3.5 border-b border-slate-700 flex-shrink-0 flex items-center justify-between">
             <h2 className="text-white font-semibold text-sm">Conversation</h2>
+            <AgentStatusIndicator issue={issue} actions={actions} />
           </div>
 
           {/* Messages */}
