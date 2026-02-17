@@ -27,10 +27,14 @@ export default function LoginPage() {
           ? err.message
           : 'Invalid email or password. Please try again.';
       // Try to extract API error message
-      const axiosErr = err as { response?: { data?: { message?: string; detail?: string } } };
+      const axiosErr = err as { response?: { data?: { message?: string; detail?: unknown } } };
+      const detail = axiosErr.response?.data?.detail;
+      const detailStr = Array.isArray(detail)
+        ? (detail as { msg?: string }[]).map((d) => d.msg ?? JSON.stringify(d)).join(', ')
+        : typeof detail === 'string' ? detail : undefined;
       setError(
         axiosErr.response?.data?.message ||
-          axiosErr.response?.data?.detail ||
+          detailStr ||
           message
       );
     } finally {

@@ -33,10 +33,14 @@ export default function RegisterPage() {
       await register(email, password);
       router.replace('/dashboard');
     } catch (err: unknown) {
-      const axiosErr = err as { response?: { data?: { message?: string; detail?: string } } };
+      const axiosErr = err as { response?: { data?: { message?: string; detail?: unknown } } };
+      const detail = axiosErr.response?.data?.detail;
+      const detailStr = Array.isArray(detail)
+        ? (detail as { msg?: string }[]).map((d) => d.msg ?? JSON.stringify(d)).join(', ')
+        : typeof detail === 'string' ? detail : undefined;
       setError(
         axiosErr.response?.data?.message ||
-          axiosErr.response?.data?.detail ||
+          detailStr ||
           'Registration failed. Please try again.'
       );
     } finally {

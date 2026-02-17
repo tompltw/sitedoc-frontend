@@ -4,18 +4,29 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import api from '@/lib/api';
 import type { Issue, Site } from '@/types';
-import { AlertTriangle, CheckCircle, Globe, Loader2, TrendingUp } from 'lucide-react';
+import {
+  AlertTriangle,
+  CheckCircle,
+  Clock,
+  Globe,
+  Heart,
+  Loader2,
+  TrendingUp,
+} from 'lucide-react';
 
 interface Stats {
   totalIssues: number;
   openIssues: number;
   resolvedIssues: number;
   totalSites: number;
+  sitesHealthy: number;
+  lastScan: string | null;
 }
 
 const STATUS_COLORS: Record<Issue['status'], string> = {
   open: 'bg-yellow-500/10 text-yellow-400 border border-yellow-600/30',
   in_progress: 'bg-blue-500/10 text-blue-400 border border-blue-600/30',
+  pending_approval: 'bg-orange-500/10 text-orange-400 border border-orange-600/30',
   resolved: 'bg-green-500/10 text-green-400 border border-green-600/30',
   dismissed: 'bg-slate-500/10 text-slate-400 border border-slate-600/30',
 };
@@ -27,23 +38,38 @@ const PRIORITY_COLORS: Record<Issue['priority'], string> = {
   low: 'text-slate-400',
 };
 
+function formatRelativeTime(dateStr: string | null): string {
+  if (!dateStr) return 'Never';
+  const diff = Date.now() - new Date(dateStr).getTime();
+  const minutes = Math.floor(diff / 60000);
+  if (minutes < 1) return 'Just now';
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
+}
+
 function StatCard({
   label,
   value,
   icon,
   color,
+  sub,
 }: {
   label: string;
   value: number | string;
   icon: React.ReactNode;
   color: string;
+  sub?: string;
 }) {
   return (
     <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 flex items-center gap-4">
       <div className={`p-3 rounded-lg ${color}`}>{icon}</div>
-      <div>
+      <div className="min-w-0">
         <p className="text-2xl font-bold text-white">{value}</p>
         <p className="text-slate-400 text-sm">{label}</p>
+        {sub && <p className="text-slate-500 text-xs mt-0.5">{sub}</p>}
       </div>
     </div>
   );
@@ -65,12 +91,30 @@ export default function DashboardPage() {
 
         const issues = issuesRes.data;
         const sites = sitesRes.data;
+        const now = Date.now();
+        const oneDay = 24 * 60 * 60 * 1000;
+
+        const sitesHealthy = sites.filter(
+          (s) =>
+            s.status === 'active' &&
+            s.last_health_check !== null &&
+            now - new Date(s.last_health_check).getTime() < oneDay
+        ).length;
+
+        const lastScan =
+          sites
+            .map((s) => s.last_health_check)
+            .filter((d): d is string => d !== null)
+            .sort()
+            .at(-1) ?? null;
 
         setStats({
           totalIssues: issues.length,
           openIssues: issues.filter((i) => i.status === 'open').length,
           resolvedIssues: issues.filter((i) => i.status === 'resolved').length,
           totalSites: sites.length,
+          sitesHealthy,
+          lastScan,
         });
 
         setRecentIssues(issues.slice(0, 8));
@@ -108,7 +152,7 @@ export default function DashboardPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4">
         <StatCard
           label="Total Issues"
           value={stats?.totalIssues ?? 0}
@@ -132,6 +176,19 @@ export default function DashboardPage() {
           value={stats?.totalSites ?? 0}
           icon={<Globe className="w-5 h-5" />}
           color="bg-purple-500/10 text-purple-400"
+        />
+        <StatCard
+          label="Sites Healthy"
+          value={stats?.sitesHealthy ?? 0}
+          icon={<Heart className="w-5 h-5" />}
+          color="bg-emerald-500/10 text-emerald-400"
+          sub={`of ${stats?.totalSites ?? 0} sites`}
+        />
+        <StatCard
+          label="Last Scan"
+          value={formatRelativeTime(stats?.lastScan ?? null)}
+          icon={<Clock className="w-5 h-5" />}
+          color="bg-slate-500/10 text-slate-400"
         />
       </div>
 

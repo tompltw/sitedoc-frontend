@@ -1,27 +1,104 @@
 'use client';
 
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, UIEvent } from 'react';
+import Link from 'next/link';
 import api from '@/lib/api';
 import { getToken } from '@/lib/auth';
-import type { Issue, ChatMessage, AgentAction, WsEvent } from '@/types';
-import { Loader2, Send, CheckCircle, XCircle, Clock } from 'lucide-react';
+import type { Issue, ChatMessage, AgentAction, WsEvent, KanbanColumn } from '@/types';
+import {
+  AlertCircle,
+  ArrowDown,
+  CheckCircle,
+  Clock,
+  Loader2,
+  Send,
+  X,
+  XCircle,
+  ArrowRight,
+  ThumbsUp,
+  ThumbsDown,
+} from 'lucide-react';
+
+// ── Kanban stage display ──────────────────────────────────────────────────
+
+const KANBAN_LABELS: Record<KanbanColumn, string> = {
+  triage: 'Triage',
+  ready_for_uat_approval: 'Ready for Approval',
+  todo: 'Queued for Dev',
+  in_progress: 'In Progress',
+  ready_for_qa: 'Ready for QA',
+  in_qa: 'QA in Progress',
+  ready_for_uat: 'Ready for Your Review',
+  done: 'Done',
+  dismissed: 'Dismissed',
+};
+
+const KANBAN_COLORS: Record<KanbanColumn, string> = {
+  triage: 'bg-slate-500/10 text-slate-300 border border-slate-600/30',
+  ready_for_uat_approval: 'bg-amber-500/10 text-amber-300 border border-amber-600/30',
+  todo: 'bg-yellow-500/10 text-yellow-300 border border-yellow-600/30',
+  in_progress: 'bg-blue-500/10 text-blue-300 border border-blue-600/30',
+  ready_for_qa: 'bg-purple-500/10 text-purple-300 border border-purple-600/30',
+  in_qa: 'bg-purple-500/10 text-purple-300 border border-purple-600/30',
+  ready_for_uat: 'bg-orange-500/10 text-orange-300 border border-orange-600/30',
+  done: 'bg-green-500/10 text-green-300 border border-green-600/30',
+  dismissed: 'bg-slate-500/10 text-slate-400 border border-slate-600/30',
+};
+
+const PIPELINE_STAGES: KanbanColumn[] = [
+  'triage', 'ready_for_uat_approval', 'todo', 'in_progress',
+  'ready_for_qa', 'in_qa', 'ready_for_uat', 'done',
+];
+
+function KanbanBadge({ col }: { col: KanbanColumn }) {
+  return (
+    <span className={`inline-block text-xs px-2.5 py-1 rounded-full font-medium ${KANBAN_COLORS[col]}`}>
+      {KANBAN_LABELS[col]}
+    </span>
+  );
+}
+
+function PipelineProgress({ col }: { col: KanbanColumn }) {
+  const current = PIPELINE_STAGES.indexOf(col);
+  if (current === -1) return null;
+  return (
+    <div className="flex items-center gap-1 mt-3 flex-wrap">
+      {PIPELINE_STAGES.map((stage, idx) => (
+        <div key={stage} className="flex items-center gap-1">
+          <div className={`w-2 h-2 rounded-full flex-shrink-0 ${
+            idx < current ? 'bg-green-400' :
+            idx === current ? 'bg-blue-400' :
+            'bg-slate-700'
+          }`} title={KANBAN_LABELS[stage]} />
+          {idx < PIPELINE_STAGES.length - 1 && (
+            <div className={`h-px w-4 ${idx < current ? 'bg-green-700' : 'bg-slate-700'}`} />
+          )}
+        </div>
+      ))}
+      <span className="text-xs text-slate-500 ml-1">{KANBAN_LABELS[col]}</span>
+    </div>
+  );
+}
+
+// ── Agent role badges ─────────────────────────────────────────────────────
+
+const AGENT_ROLE_LABEL: Record<string, string> = {
+  pm: '🤖 PM',
+  dev: '🔧 Dev',
+  qa: '🧪 QA',
+  tech_lead: '👨‍💼 Tech Lead',
+};
+
+function AgentRoleBadge({ role }: { role: string }) {
+  return (
+    <span className="text-[10px] text-slate-500 font-medium">
+      {AGENT_ROLE_LABEL[role] ?? role}
+    </span>
+  );
+}
 
 interface Props {
   issue: Issue;
-}
-
-function StatusBadge({ status }: { status: Issue['status'] }) {
-  const styles: Record<Issue['status'], string> = {
-    open: 'bg-yellow-500/10 text-yellow-400 border border-yellow-600/30',
-    in_progress: 'bg-blue-500/10 text-blue-400 border border-blue-600/30',
-    resolved: 'bg-green-500/10 text-green-400 border border-green-600/30',
-    dismissed: 'bg-slate-500/10 text-slate-400 border border-slate-600/30',
-  };
-  return (
-    <span className={`inline-block text-xs px-2.5 py-1 rounded-full font-medium ${styles[status]}`}>
-      {status.replace('_', ' ')}
-    </span>
-  );
 }
 
 function PriorityBadge({ priority }: { priority: Issue['priority'] }) {
@@ -41,6 +118,7 @@ function PriorityBadge({ priority }: { priority: Issue['priority'] }) {
 function ActionStatusIcon({ status }: { status: string }) {
   if (status === 'completed') return <CheckCircle className="w-4 h-4 text-green-400 flex-shrink-0" />;
   if (status === 'failed') return <XCircle className="w-4 h-4 text-red-400 flex-shrink-0" />;
+  if (status === 'in_progress') return <Loader2 className="w-4 h-4 text-blue-400 flex-shrink-0 animate-spin" />;
   return <Clock className="w-4 h-4 text-yellow-400 flex-shrink-0 animate-pulse" />;
 }
 
@@ -52,12 +130,23 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
   const [sendingMsg, setSendingMsg] = useState(false);
   const [approvingFix, setApprovingFix] = useState(false);
   const [rejectingFix, setRejectingFix] = useState(false);
+  const [transitioning, setTransitioning] = useState(false);
   const [actionError, setActionError] = useState('');
   const [loadingInitial, setLoadingInitial] = useState(true);
-  const chatBottomRef = useRef<HTMLDivElement>(null);
-  const wsRef = useRef<WebSocket | null>(null);
 
-  // Fetch initial data
+  // Banners
+  const [diagnosisBanner, setDiagnosisBanner] = useState<string | null>(null);
+  const [fixBanner, setFixBanner] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+
+  const chatBottomRef = useRef<HTMLDivElement>(null);
+  const chatContainerRef = useRef<HTMLDivElement>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const issueIdRef = useRef(initialIssue.id);
+  const [isNearBottom, setIsNearBottom] = useState(true);
+  const [hasNewMessages, setHasNewMessages] = useState(false);
+
+  // Fetch initial data — only clear loading on success so the spinner
+  // keeps showing until polling or WS delivers data on failure.
   useEffect(() => {
     async function load() {
       try {
@@ -67,54 +156,23 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
         ]);
         setMessages(msgsRes.data);
         setActions(actionsRes.data);
-      } catch {
-        // Continue even if these fail — WS will deliver live updates
-      } finally {
         setLoadingInitial(false);
+      } catch {
+        // Keep loadingInitial=true — polling or WS will deliver updates
       }
     }
     load();
   }, [issue.id]);
 
-  // WebSocket connection
-  useEffect(() => {
-    const token = getToken();
-    if (!token) return;
-
-    const wsUrl = `ws://localhost:5000/ws/issues/${issue.id}?token=${token}`;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
-
-    ws.onmessage = (event: MessageEvent) => {
-      try {
-        const data: WsEvent = JSON.parse(event.data as string);
-        handleWsEvent(data);
-      } catch {
-        // Ignore parse errors
-      }
-    };
-
-    ws.onerror = () => {
-      // Silent — degraded to polling
-    };
-
-    ws.onclose = () => {
-      wsRef.current = null;
-    };
-
-    return () => {
-      ws.close();
-    };
-  }, [issue.id]); // eslint-disable-line react-hooks/exhaustive-deps
-
   const handleWsEvent = useCallback((event: WsEvent) => {
+    const id = issueIdRef.current;
     switch (event.type) {
       case 'message':
       case 'chat_message': {
         const msg = event.message as ChatMessage | undefined;
         if (msg) {
+          setLoadingInitial(false);
           setMessages((prev) => {
-            // Deduplicate
             if (prev.find((m) => m.id === msg.id)) return prev;
             return [...prev, msg];
           });
@@ -143,13 +201,151 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
         if (updated) setIssue(updated);
         break;
       }
-    }
-  }, []);
 
-  // Auto-scroll chat
+      // ── New event types ──────────────────────────────────────────────
+      case 'diagnosis_ready': {
+        const confidence = event.confidence_score as number | undefined;
+        const pct = confidence != null ? ` — confidence ${(confidence * 100).toFixed(0)}%` : '';
+        setDiagnosisBanner(`Diagnosis complete${pct}`);
+        api.get<Issue>(`/api/v1/issues/${id}`)
+          .then((res) => setIssue(res.data))
+          .catch(() => {});
+        break;
+      }
+      case 'action_started': {
+        const actionId = event.action_id as string | undefined;
+        if (actionId) {
+          setActions((prev) =>
+            prev.map((a) => (a.id === actionId ? { ...a, status: 'in_progress' } : a))
+          );
+        }
+        break;
+      }
+      case 'action_completed': {
+        const actionId = event.action_id as string | undefined;
+        if (actionId) {
+          setActions((prev) =>
+            prev.map((a) => (a.id === actionId ? { ...a, status: 'completed' } : a))
+          );
+        }
+        break;
+      }
+      case 'action_failed': {
+        const actionId = event.action_id as string | undefined;
+        const errDetail = event.error as string | undefined;
+        if (actionId) {
+          setActions((prev) =>
+            prev.map((a) =>
+              a.id === actionId
+                ? { ...a, status: 'failed', error_detail: errDetail }
+                : a
+            )
+          );
+        }
+        break;
+      }
+      case 'fix_complete': {
+        setFixBanner({ type: 'success', message: 'Fix applied successfully!' });
+        api.get<Issue>(`/api/v1/issues/${id}`)
+          .then((res) => setIssue(res.data))
+          .catch(() => {});
+        break;
+      }
+      case 'fix_failed': {
+        const errMsg = event.error as string | undefined;
+        setFixBanner({
+          type: 'error',
+          message: errMsg ?? 'Fix failed. Please check the action log.',
+        });
+        break;
+      }
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // WebSocket connection
   useEffect(() => {
+    const token = getToken();
+    if (!token) return;
+
+    // Build WS URL from the API base URL (swap http → ws)
+    const apiBase = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:5000';
+    const wsBase = apiBase.replace(/^http/, 'ws');
+    const wsUrl = `${wsBase}/ws/issues/${issue.id}?token=${token}`;
+
+    let pollInterval: ReturnType<typeof setInterval> | null = null;
+
+    function startPolling() {
+      if (pollInterval) return;
+      pollInterval = setInterval(async () => {
+        try {
+          const res = await api.get<ChatMessage[]>(`/api/v1/issues/${issue.id}/messages`);
+          setMessages(res.data);
+          setLoadingInitial(false);
+          // Also refresh issue state
+          const issueRes = await api.get(`/api/v1/issues/${issue.id}`);
+          setIssue(issueRes.data);
+        } catch { /* silent */ }
+      }, 5000);
+    }
+
+    function stopPolling() {
+      if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
+    }
+
+    const ws = new WebSocket(wsUrl);
+    wsRef.current = ws;
+
+    ws.onopen = () => { stopPolling(); };
+
+    ws.onmessage = (event: MessageEvent) => {
+      try {
+        const data: WsEvent = JSON.parse(event.data as string);
+        handleWsEvent(data);
+      } catch {
+        // Ignore parse errors
+      }
+    };
+
+    ws.onerror = () => { startPolling(); };
+    ws.onclose = () => { wsRef.current = null; startPolling(); };
+
+    // Start polling immediately as fallback (WS will stop it if it connects)
+    startPolling();
+
+    return () => {
+      ws.close();
+      stopPolling();
+    };
+  }, [issue.id, handleWsEvent]);
+
+  // Track whether the user is scrolled near the bottom of the chat
+  function handleChatScroll(e: UIEvent<HTMLDivElement>) {
+    const el = e.currentTarget;
+    const threshold = 80; // px from bottom
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < threshold;
+    setIsNearBottom(atBottom);
+    if (atBottom) setHasNewMessages(false);
+  }
+
+  function scrollToBottom() {
     chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+    setHasNewMessages(false);
+  }
+
+  // Auto-scroll chat only if the user is near the bottom
+  useEffect(() => {
+    if (isNearBottom) {
+      chatBottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    } else if (messages.length > 0) {
+      setHasNewMessages(true);
+    }
+  }, [messages, isNearBottom]);
+
+  // Progress bar derived values
+  const completedActions = actions.filter((a) => a.status === 'completed').length;
+  const failedActions = actions.filter((a) => a.status === 'failed').length;
+  const totalActions = actions.length;
+  const showProgress = totalActions > 0 && (issue.status === 'in_progress' || completedActions > 0);
 
   async function sendMessage(e: React.FormEvent) {
     e.preventDefault();
@@ -165,7 +361,7 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
       });
       setNewMessage('');
     } catch {
-      // Show nothing — message failed silently (could add toast)
+      // Show nothing — message failed silently
     } finally {
       setSendingMsg(false);
     }
@@ -197,49 +393,165 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
     }
   }
 
-  const showApproveReject =
-    issue.status === 'pending_approval';
+  async function transition(toCol: KanbanColumn, note?: string) {
+    setTransitioning(true);
+    setActionError('');
+    try {
+      const res = await api.post<Issue>(`/api/v1/issues/${issue.id}/transition`, {
+        to_col: toCol,
+        note,
+      });
+      setIssue(res.data);
+    } catch (e: unknown) {
+      const d = (e as { response?: { data?: { detail?: unknown } } })?.response?.data?.detail;
+      setActionError(typeof d === 'string' ? d : 'Action failed. Please try again.');
+    } finally {
+      setTransitioning(false);
+    }
+  }
+
+  const showApproveReject = issue.status === 'pending_approval';
+  const kanban = issue.kanban_column ?? 'triage';
 
   return (
     <div className="space-y-6">
+      {/* Diagnosis banner */}
+      {diagnosisBanner && (
+        <div className="flex items-center justify-between gap-3 bg-blue-500/10 border border-blue-500/30 text-blue-300 rounded-xl px-4 py-3 text-sm">
+          <div className="flex items-center gap-2">
+            <CheckCircle className="w-4 h-4 flex-shrink-0" />
+            <span>{diagnosisBanner}</span>
+          </div>
+          <button
+            onClick={() => setDiagnosisBanner(null)}
+            className="text-blue-400 hover:text-blue-200 flex-shrink-0"
+            aria-label="Dismiss"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
+      {/* Fix result banner */}
+      {fixBanner && (
+        <div
+          className={`flex items-center justify-between gap-3 rounded-xl px-4 py-3 text-sm border ${
+            fixBanner.type === 'success'
+              ? 'bg-green-500/10 border-green-500/30 text-green-300'
+              : 'bg-red-500/10 border-red-500/30 text-red-300'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {fixBanner.type === 'success' ? (
+              <CheckCircle className="w-4 h-4 flex-shrink-0" />
+            ) : (
+              <AlertCircle className="w-4 h-4 flex-shrink-0" />
+            )}
+            <span>{fixBanner.message}</span>
+          </div>
+          <button
+            onClick={() => setFixBanner(null)}
+            className={`flex-shrink-0 ${
+              fixBanner.type === 'success' ? 'text-green-400 hover:text-green-200' : 'text-red-400 hover:text-red-200'
+            }`}
+            aria-label="Dismiss"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Header */}
       <div className="bg-slate-800 border border-slate-700 rounded-xl p-5">
+        {/* Back + ticket number */}
+        <div className="flex items-center justify-between mb-3">
+          <Link href="/issues" className="text-slate-500 hover:text-white text-xs transition flex items-center gap-1">
+            ← Back to Issues
+          </Link>
+          {issue.ticket_number && (
+            <span className="text-xs text-slate-500 font-mono bg-slate-700 px-2 py-1 rounded">
+              TKT-{String(issue.ticket_number).padStart(3, '0')}
+            </span>
+          )}
+        </div>
+
         <div className="flex flex-wrap items-start justify-between gap-4">
           <div className="flex-1 min-w-0">
             <h1 className="text-xl font-bold text-white truncate">{issue.title}</h1>
             <p className="text-slate-400 text-sm mt-2 leading-relaxed">{issue.description}</p>
             <div className="flex flex-wrap items-center gap-2 mt-3">
-              <StatusBadge status={issue.status} />
+              <KanbanBadge col={kanban} />
               <PriorityBadge priority={issue.priority} />
               {issue.confidence_score !== null && (
                 <span className="text-xs text-slate-400 bg-slate-700 border border-slate-600 px-2.5 py-1 rounded-full">
                   Confidence: {(issue.confidence_score * 100).toFixed(0)}%
                 </span>
               )}
+              {issue.dev_fail_count > 0 && (
+                <span className="text-xs text-red-400 bg-red-900/20 border border-red-600/30 px-2.5 py-1 rounded-full">
+                  {issue.dev_fail_count} fail{issue.dev_fail_count !== 1 ? 's' : ''}
+                </span>
+              )}
             </div>
+
+            {/* Pipeline progress bar */}
+            <PipelineProgress col={kanban} />
           </div>
 
-          {/* Actions */}
-          {showApproveReject && (
-            <div className="flex gap-2 flex-shrink-0">
+          {/* Contextual customer action buttons */}
+          <div className="flex flex-col gap-2 flex-shrink-0">
+            {kanban === 'ready_for_uat_approval' && (
               <button
-                onClick={approveFix}
-                disabled={approvingFix || rejectingFix}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:bg-blue-900 disabled:cursor-not-allowed text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
+                onClick={() => transition('todo')}
+                disabled={transitioning}
+                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
               >
-                {approvingFix && <Loader2 className="w-4 h-4 animate-spin" />}
-                Approve Fix
+                {transitioning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
+                Approve &amp; Start Work
               </button>
-              <button
-                onClick={rejectFix}
-                disabled={approvingFix || rejectingFix}
-                className="flex items-center gap-2 bg-red-600 hover:bg-red-500 disabled:bg-red-900 disabled:cursor-not-allowed text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
-              >
-                {rejectingFix && <Loader2 className="w-4 h-4 animate-spin" />}
-                Reject
-              </button>
-            </div>
-          )}
+            )}
+            {kanban === 'ready_for_uat' && (
+              <>
+                <button
+                  onClick={() => transition('done')}
+                  disabled={transitioning}
+                  className="flex items-center gap-2 bg-green-600 hover:bg-green-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
+                >
+                  {transitioning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ThumbsUp className="w-4 h-4" />}
+                  UAT Pass — Looks Good
+                </button>
+                <button
+                  onClick={() => transition('todo', 'UAT failed — customer rejected')}
+                  disabled={transitioning}
+                  className="flex items-center gap-2 bg-red-600 hover:bg-red-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
+                >
+                  {transitioning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ThumbsDown className="w-4 h-4" />}
+                  UAT Fail — Still Broken
+                </button>
+              </>
+            )}
+            {/* Legacy approve/reject (pending_approval status) */}
+            {showApproveReject && kanban !== 'ready_for_uat' && (
+              <div className="flex gap-2">
+                <button
+                  onClick={approveFix}
+                  disabled={approvingFix || rejectingFix}
+                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
+                >
+                  {approvingFix && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Approve Fix
+                </button>
+                <button
+                  onClick={rejectFix}
+                  disabled={approvingFix || rejectingFix}
+                  className="flex items-center gap-2 bg-red-600 hover:bg-red-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
+                >
+                  {rejectingFix && <Loader2 className="w-4 h-4 animate-spin" />}
+                  Reject
+                </button>
+              </div>
+            )}
+          </div>
         </div>
 
         {actionError && (
@@ -257,10 +569,15 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
           </div>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          <div
+            ref={chatContainerRef}
+            onScroll={handleChatScroll}
+            className="flex-1 overflow-y-auto p-4 space-y-3 relative"
+          >
             {loadingInitial ? (
-              <div className="flex items-center justify-center h-full">
-                <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+              <div className="flex flex-col items-center justify-center h-full gap-2">
+                <Loader2 className="w-6 h-6 animate-spin text-blue-400" />
+                <span className="text-slate-400 text-sm">Loading messages…</span>
               </div>
             ) : messages.length === 0 ? (
               <p className="text-slate-500 text-sm text-center py-8">No messages yet.</p>
@@ -279,8 +596,13 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
                 return (
                   <div
                     key={msg.id}
-                    className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
+                    className={`flex flex-col ${isUser ? 'items-end' : 'items-start'}`}
                   >
+                    {!isUser && msg.agent_role && (
+                      <div className="mb-1 ml-1">
+                        <AgentRoleBadge role={msg.agent_role} />
+                      </div>
+                    )}
                     <div
                       className={`max-w-[80%] rounded-2xl px-4 py-2.5 text-sm leading-relaxed ${
                         isUser
@@ -306,6 +628,19 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
             )}
             <div ref={chatBottomRef} />
           </div>
+
+          {/* New messages indicator */}
+          {hasNewMessages && (
+            <div className="flex-shrink-0 flex justify-center py-1 border-t border-slate-700/50">
+              <button
+                onClick={scrollToBottom}
+                className="flex items-center gap-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium px-3 py-1.5 rounded-full shadow-lg transition"
+              >
+                <ArrowDown className="w-3 h-3" />
+                New messages
+              </button>
+            </div>
+          )}
 
           {/* Input */}
           <form
@@ -336,7 +671,33 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
         {/* Agent Actions */}
         <div className="bg-slate-800 border border-slate-700 rounded-xl flex flex-col h-[520px]">
           <div className="px-5 py-3.5 border-b border-slate-700 flex-shrink-0">
-            <h2 className="text-white font-semibold text-sm">Fix Progress</h2>
+            <div className="flex items-center justify-between">
+              <h2 className="text-white font-semibold text-sm">Fix Progress</h2>
+              {totalActions > 0 && (
+                <span className="text-xs text-slate-400">
+                  {completedActions}/{totalActions} steps
+                  {failedActions > 0 && (
+                    <span className="text-red-400 ml-1">({failedActions} failed)</span>
+                  )}
+                </span>
+              )}
+            </div>
+
+            {/* Progress bar */}
+            {showProgress && (
+              <div className="mt-2.5">
+                <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all duration-500 ${
+                      failedActions > 0 ? 'bg-red-500' : 'bg-blue-500'
+                    }`}
+                    style={{
+                      width: `${totalActions > 0 ? (completedActions / totalActions) * 100 : 0}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           <div className="flex-1 overflow-y-auto p-4">
@@ -353,7 +714,15 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
                 {actions.map((action, idx) => (
                   <li
                     key={action.id}
-                    className="flex items-start gap-3 bg-slate-700/40 rounded-lg p-3"
+                    className={`flex items-start gap-3 rounded-lg p-3 transition-colors ${
+                      action.status === 'in_progress'
+                        ? 'bg-blue-500/10 border border-blue-600/20'
+                        : action.status === 'completed'
+                        ? 'bg-green-500/5 border border-green-600/10'
+                        : action.status === 'failed'
+                        ? 'bg-red-500/10 border border-red-600/20'
+                        : 'bg-slate-700/40'
+                    }`}
                   >
                     {/* Step number */}
                     <span className="text-xs text-slate-500 font-mono w-5 flex-shrink-0 mt-0.5">
@@ -369,6 +738,11 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
                       <p className="text-xs text-slate-400 mt-1 leading-relaxed">
                         {action.description}
                       </p>
+                      {action.status === 'failed' && action.error_detail && (
+                        <p className="text-xs text-red-400 mt-1 leading-relaxed">
+                          {action.error_detail}
+                        </p>
+                      )}
                     </div>
                     <span
                       className={`text-[10px] font-medium flex-shrink-0 ${
@@ -376,10 +750,12 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
                           ? 'text-green-400'
                           : action.status === 'failed'
                           ? 'text-red-400'
+                          : action.status === 'in_progress'
+                          ? 'text-blue-400'
                           : 'text-yellow-400'
                       }`}
                     >
-                      {action.status}
+                      {action.status.replace('_', ' ')}
                     </span>
                   </li>
                 ))}
