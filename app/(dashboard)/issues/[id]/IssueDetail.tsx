@@ -198,7 +198,7 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
   }
 
   const showApproveReject =
-    issue.status === 'in_progress' && (issue.confidence_score ?? 1) < 0.8;
+    issue.status === 'pending_approval';
 
   return (
     <div className="space-y-6">

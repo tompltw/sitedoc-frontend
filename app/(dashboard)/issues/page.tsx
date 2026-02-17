@@ -8,7 +8,8 @@ import { Loader2, ExternalLink } from 'lucide-react';
 
 const STATUS_BADGE: Record<Issue['status'], string> = {
   open: 'bg-yellow-500/10 text-yellow-400 border border-yellow-600/30',
-  in_progress: 'bg-blue-500/10 text-blue-400 border border-blue-600/30',
+  pending_approval: 'bg-amber-500/10 text-amber-400',
+    in_progress: 'bg-blue-500/10 text-blue-400 border border-blue-600/30',
   resolved: 'bg-green-500/10 text-green-400 border border-green-600/30',
   dismissed: 'bg-slate-500/10 text-slate-400 border border-slate-600/30',
 };
