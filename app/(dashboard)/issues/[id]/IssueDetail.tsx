@@ -9,15 +9,41 @@ import {
   AlertCircle,
   ArrowDown,
   CheckCircle,
+  ChevronDown,
+  ChevronRight,
   Clock,
+  Download,
   Loader2,
+  Paperclip,
   Send,
+  Trash2,
+  Upload,
   X,
   XCircle,
   ArrowRight,
   ThumbsUp,
   ThumbsDown,
 } from 'lucide-react';
+
+// ── Attachment types ──────────────────────────────────────────────────────
+
+interface Attachment {
+  id: string;
+  issue_id: string;
+  filename: string;
+  mime_type: string | null;
+  size_bytes: number | null;
+  uploaded_by: string;
+  created_at: string;
+  download_url: string;
+}
+
+function formatBytes(bytes: number | null): string {
+  if (bytes == null) return '—';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
 
 // ── Kanban stage display ──────────────────────────────────────────────────
 
@@ -190,17 +216,27 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
   const [isNearBottom, setIsNearBottom] = useState(true);
   const [hasNewMessages, setHasNewMessages] = useState(false);
 
+  // Attachments state
+  const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const [attachmentsOpen, setAttachmentsOpen] = useState(true);
+  const [uploadingFile, setUploadingFile] = useState(false);
+  const [deletingAttachment, setDeletingAttachment] = useState<string | null>(null);
+  const [attachmentError, setAttachmentError] = useState('');
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
   // Fetch initial data — only clear loading on success so the spinner
   // keeps showing until polling or WS delivers data on failure.
   useEffect(() => {
     async function load() {
       try {
-        const [msgsRes, actionsRes] = await Promise.all([
+        const [msgsRes, actionsRes, attsRes] = await Promise.all([
           api.get<ChatMessage[]>(`/api/v1/issues/${issue.id}/messages`),
           api.get<AgentAction[]>(`/api/v1/issues/${issue.id}/actions`),
+          api.get<Attachment[]>(`/api/v1/issues/${issue.id}/attachments`),
         ]);
         setMessages(msgsRes.data);
         setActions(actionsRes.data);
+        setAttachments(attsRes.data);
         setLoadingInitial(false);
       } catch {
         // Keep loadingInitial=true — polling or WS will deliver updates
@@ -208,6 +244,43 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
     }
     load();
   }, [issue.id]);
+
+  // Attachment handlers
+  async function handleFileUpload(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setUploadingFile(true);
+    setAttachmentError('');
+    try {
+      const formData = new FormData();
+      formData.append('file', file);
+      const res = await api.post<Attachment>(
+        `/api/v1/issues/${issue.id}/attachments`,
+        formData,
+        { headers: { 'Content-Type': 'multipart/form-data' } }
+      );
+      setAttachments((prev) => [...prev, res.data]);
+    } catch {
+      setAttachmentError('Upload failed. Please try again.');
+    } finally {
+      setUploadingFile(false);
+      // Reset file input so same file can be re-uploaded
+      if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  }
+
+  async function handleDeleteAttachment(attachmentId: string) {
+    setDeletingAttachment(attachmentId);
+    setAttachmentError('');
+    try {
+      await api.delete(`/api/v1/issues/${issue.id}/attachments/${attachmentId}`);
+      setAttachments((prev) => prev.filter((a) => a.id !== attachmentId));
+    } catch {
+      setAttachmentError('Delete failed. Please try again.');
+    } finally {
+      setDeletingAttachment(null);
+    }
+  }
 
   const handleWsEvent = useCallback((event: WsEvent) => {
     const id = issueIdRef.current;
@@ -809,6 +882,120 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
             )}
           </div>
         </div>
+      </div>
+
+      {/* Attachments panel */}
+      <div className="bg-slate-800 border border-slate-700 rounded-xl">
+        {/* Header */}
+        <button
+          onClick={() => setAttachmentsOpen((v) => !v)}
+          className="w-full px-5 py-3.5 flex items-center justify-between hover:bg-slate-700/30 rounded-xl transition"
+        >
+          <div className="flex items-center gap-2">
+            <Paperclip className="w-4 h-4 text-slate-400" />
+            <h2 className="text-white font-semibold text-sm">Attachments</h2>
+            {attachments.length > 0 && (
+              <span className="bg-blue-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+                {attachments.length}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2">
+            {/* Upload button inside header */}
+            <button
+              onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
+              disabled={uploadingFile}
+              className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white bg-slate-700 hover:bg-slate-600 px-2.5 py-1 rounded-lg transition disabled:opacity-50"
+              title="Upload file"
+            >
+              {uploadingFile ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+              ) : (
+                <Upload className="w-3.5 h-3.5" />
+              )}
+              {uploadingFile ? 'Uploading…' : 'Upload'}
+            </button>
+            {attachmentsOpen ? (
+              <ChevronDown className="w-4 h-4 text-slate-500" />
+            ) : (
+              <ChevronRight className="w-4 h-4 text-slate-500" />
+            )}
+          </div>
+        </button>
+
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          className="hidden"
+          onChange={handleFileUpload}
+          accept="*/*"
+        />
+
+        {/* Body */}
+        {attachmentsOpen && (
+          <div className="px-5 pb-4 border-t border-slate-700">
+            {attachmentError && (
+              <div className="mt-3 text-xs text-red-400 bg-red-900/20 border border-red-700/40 rounded-lg px-3 py-2">
+                {attachmentError}
+              </div>
+            )}
+
+            {attachments.length === 0 ? (
+              <p className="text-slate-500 text-sm text-center py-6">
+                No attachments yet.{' '}
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="text-blue-400 hover:text-blue-300 underline transition"
+                >
+                  Upload a file
+                </button>
+              </p>
+            ) : (
+              <ul className="mt-3 space-y-2">
+                {attachments.map((att) => (
+                  <li
+                    key={att.id}
+                    className="flex items-center gap-3 bg-slate-700/40 rounded-lg px-3 py-2.5 group"
+                  >
+                    <Paperclip className="w-4 h-4 text-slate-500 flex-shrink-0" />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-slate-200 truncate">{att.filename}</p>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        {formatBytes(att.size_bytes)}
+                        {att.mime_type ? ` · ${att.mime_type}` : ''}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1 flex-shrink-0">
+                      {/* Download */}
+                      <a
+                        href={`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:5000'}${att.download_url}`}
+                        download={att.filename}
+                        className="p-1.5 text-slate-400 hover:text-white rounded transition"
+                        title="Download"
+                      >
+                        <Download className="w-4 h-4" />
+                      </a>
+                      {/* Delete */}
+                      <button
+                        onClick={() => handleDeleteAttachment(att.id)}
+                        disabled={deletingAttachment === att.id}
+                        className="p-1.5 text-slate-500 hover:text-red-400 rounded transition disabled:opacity-50"
+                        title="Delete"
+                      >
+                        {deletingAttachment === att.id ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-4 h-4" />
+                        )}
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Metadata */}
