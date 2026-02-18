@@ -2,9 +2,10 @@ import axios from 'axios';
 
 const api = axios.create({
   baseURL: process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:5000',
-  headers: {
-    'Content-Type': 'application/json',
-  },
+  // Do NOT set Content-Type here — axios auto-detects per request.
+  // Setting application/json globally breaks FormData (multipart) uploads
+  // because the hardcoded header overrides the boundary-bearing Content-Type
+  // that the browser must set for multipart/form-data.
 });
 
 // Request interceptor — attach Bearer token
