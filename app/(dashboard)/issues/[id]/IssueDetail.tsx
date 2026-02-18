@@ -256,8 +256,7 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
       formData.append('file', file);
       const res = await api.post<Attachment>(
         `/api/v1/issues/${issue.id}/attachments`,
-        formData,
-        { headers: { 'Content-Type': 'multipart/form-data' } }
+        formData
       );
       setAttachments((prev) => [...prev, res.data]);
     } catch {
