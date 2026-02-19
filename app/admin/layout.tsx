@@ -8,19 +8,16 @@ import api from '@/lib/api';
 import type { Customer } from '@/types';
 import {
   LayoutDashboard,
-  AlertTriangle,
+  Users,
   Globe,
+  AlertTriangle,
+  Bot,
   LogOut,
   Menu,
   X,
   ShieldAlert,
+  ChevronLeft,
 } from 'lucide-react';
-
-const navItems = [
-  { href: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { href: '/issues', label: 'Issues', icon: AlertTriangle },
-  { href: '/sites', label: 'Sites', icon: Globe },
-];
 
 const ADMIN_DOMAIN = '@sitedoc.ai';
 
@@ -33,13 +30,21 @@ function isAdminEmail(email: string): boolean {
   return adminEmails.includes(email.toLowerCase());
 }
 
-export default function DashboardLayout({ children }: { children: React.ReactNode }) {
+const navItems = [
+  { href: '/admin', label: 'Overview', icon: LayoutDashboard, exact: true },
+  { href: '/admin/users', label: 'Users', icon: Users },
+  { href: '/admin/sites', label: 'Sites', icon: Globe },
+  { href: '/admin/issues', label: 'Issues', icon: AlertTriangle },
+  { href: '/admin/agents', label: 'Agents', icon: Bot },
+];
+
+export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const pathname = usePathname();
   const [email, setEmail] = useState('');
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-
+  const [loading, setLoading] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
 
   useEffect(() => {
     if (!isAuthenticated()) {
@@ -47,28 +52,52 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       return;
     }
 
-    // Fetch current user info
     api
       .get<Customer>('/api/v1/auth/me')
       .then((res) => {
-        setEmail(res.data.email);
-        setIsAdmin(isAdminEmail(res.data.email));
+        const userEmail = res.data.email;
+        setEmail(userEmail);
+        setIsAdmin(isAdminEmail(userEmail));
+        setLoading(false);
       })
       .catch(() => {
-        // If /me fails with 401 the interceptor handles redirect
         const token = getToken();
         if (!token) router.replace('/login');
+        setLoading(false);
       });
   }, [router]);
 
-  function handleLogout() {
-    logout();
-  }
-
-  const isActive = (href: string) => {
-    if (href === '/dashboard') return pathname === '/dashboard';
+  const isActive = (href: string, exact?: boolean) => {
+    if (exact) return pathname === href;
     return pathname.startsWith(href);
   };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="animate-spin w-6 h-6 border-2 border-blue-500 border-t-transparent rounded-full" />
+      </div>
+    );
+  }
+
+  if (!isAdmin) {
+    return (
+      <div className="min-h-screen bg-slate-900 flex items-center justify-center">
+        <div className="text-center">
+          <ShieldAlert className="w-16 h-16 text-red-500 mx-auto mb-4" />
+          <h1 className="text-2xl font-bold text-white mb-2">Access Denied</h1>
+          <p className="text-slate-400 mb-6">You don&apos;t have permission to access the admin area.</p>
+          <Link
+            href="/dashboard"
+            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-medium px-5 py-2.5 rounded-lg transition"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            Back to Dashboard
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-slate-900 flex">
@@ -88,9 +117,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       >
         {/* Logo */}
         <div className="flex items-center justify-between px-6 py-5 border-b border-slate-800">
-          <Link href="/dashboard" className="text-xl font-bold text-white tracking-tight">
-            SiteDoc
-          </Link>
+          <div>
+            <div className="text-xl font-bold text-white tracking-tight">SiteDoc</div>
+            <div className="text-xs text-red-400 font-semibold uppercase tracking-widest mt-0.5">Super Admin</div>
+          </div>
           <button
             onClick={() => setSidebarOpen(false)}
             className="lg:hidden text-slate-400 hover:text-white"
@@ -101,14 +131,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
         {/* Nav */}
         <nav className="flex-1 px-3 py-4 space-y-1">
-          {navItems.map(({ href, label, icon: Icon }) => (
+          {navItems.map(({ href, label, icon: Icon, exact }) => (
             <Link
               key={href}
               href={href}
               onClick={() => setSidebarOpen(false)}
               className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
-                isActive(href)
-                  ? 'bg-blue-600 text-white'
+                isActive(href, exact)
+                  ? 'bg-red-600 text-white'
                   : 'text-slate-400 hover:text-white hover:bg-slate-800'
               }`}
             >
@@ -117,32 +147,25 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
             </Link>
           ))}
 
-          {isAdmin && (
-            <div className="pt-3 mt-1 border-t border-slate-800">
-              <Link
-                href="/admin"
-                onClick={() => setSidebarOpen(false)}
-                className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition ${
-                  isActive('/admin')
-                    ? 'bg-red-600 text-white'
-                    : 'text-red-400 hover:text-red-300 hover:bg-red-900/20'
-                }`}
-              >
-                <ShieldAlert className="w-4 h-4" />
-                Admin
-              </Link>
-            </div>
-          )}
+          <div className="pt-4 border-t border-slate-800 mt-4">
+            <Link
+              href="/dashboard"
+              className="flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium text-slate-500 hover:text-slate-300 hover:bg-slate-800 transition"
+            >
+              <ChevronLeft className="w-4 h-4" />
+              Back to App
+            </Link>
+          </div>
         </nav>
 
-        {/* User / Logout */}
+        {/* User */}
         <div className="px-3 py-4 border-t border-slate-800">
           <div className="px-3 py-2 mb-1">
-            <p className="text-xs text-slate-500 font-medium uppercase tracking-wide">Account</p>
+            <p className="text-xs text-slate-500 font-medium uppercase tracking-wide">Admin</p>
             <p className="text-sm text-slate-300 truncate mt-1">{email || '—'}</p>
           </div>
           <button
-            onClick={handleLogout}
+            onClick={logout}
             className="flex items-center gap-3 w-full px-3 py-2.5 rounded-lg text-sm font-medium text-slate-400 hover:text-white hover:bg-slate-800 transition"
           >
             <LogOut className="w-4 h-4" />
@@ -151,7 +174,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
       </aside>
 
-      {/* Main content */}
+      {/* Main */}
       <div className="flex-1 flex flex-col min-w-0">
         {/* Top bar */}
         <header className="bg-slate-900 border-b border-slate-800 px-4 lg:px-6 py-4 flex items-center gap-4">
@@ -161,18 +184,17 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           >
             <Menu className="w-5 h-5" />
           </button>
+          <div className="flex items-center gap-2 text-red-400">
+            <ShieldAlert className="w-4 h-4" />
+            <span className="text-sm font-semibold">Admin Console</span>
+          </div>
           <div className="flex-1" />
           <span className="text-sm text-slate-400 hidden sm:block">{email}</span>
-          <button
-            onClick={handleLogout}
-            className="text-slate-400 hover:text-white transition"
-            title="Sign out"
-          >
+          <button onClick={logout} className="text-slate-400 hover:text-white transition" title="Sign out">
             <LogOut className="w-4 h-4" />
           </button>
         </header>
 
-        {/* Page */}
         <main className="flex-1 p-4 lg:p-6 overflow-auto">{children}</main>
       </div>
     </div>
