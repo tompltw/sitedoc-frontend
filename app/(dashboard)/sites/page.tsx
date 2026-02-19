@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import api from '@/lib/api';
 import type { Site } from '@/types';
-import { Loader2, Globe, ExternalLink, Plus, AlertTriangle } from 'lucide-react';
+import { Loader2, Globe, ExternalLink, Plus, AlertTriangle, Settings } from 'lucide-react';
 import AddSiteWizard from './AddSiteWizard';
 
 function StatusDot({ status }: { status: string }) {
@@ -167,13 +167,20 @@ export default function SitesPage() {
               </p>
 
               {/* Actions */}
-              <div className="mt-auto pt-3 border-t border-slate-700">
+              <div className="mt-auto pt-3 border-t border-slate-700 space-y-1.5">
                 <Link
                   href={`/issues?site_id=${site.id}`}
                   className="flex items-center justify-center gap-2 w-full text-xs font-medium text-slate-300 hover:text-white bg-slate-700 hover:bg-slate-600 rounded-lg px-3 py-2 transition"
                 >
                   <AlertTriangle className="w-3.5 h-3.5" />
                   View Issues
+                </Link>
+                <Link
+                  href={`/sites/${site.id}`}
+                  className="flex items-center justify-center gap-2 w-full text-xs font-medium text-slate-500 hover:text-slate-300 hover:bg-slate-700 rounded-lg px-3 py-1.5 transition"
+                >
+                  <Settings className="w-3.5 h-3.5" />
+                  Settings &amp; Credentials
                 </Link>
               </div>
             </div>
