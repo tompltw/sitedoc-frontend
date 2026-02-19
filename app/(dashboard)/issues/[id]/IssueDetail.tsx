@@ -698,7 +698,27 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
                 <span className="text-slate-400 text-sm">Loading messages…</span>
               </div>
             ) : messages.length === 0 ? (
-              <p className="text-slate-500 text-sm text-center py-8">No messages yet.</p>
+              (kanban === 'done' || kanban === 'dismissed') ? (
+                <p className="text-slate-500 text-sm text-center py-8">No messages recorded.</p>
+              ) : (
+                <div className="flex flex-col items-start gap-1 px-1">
+                  <AgentRoleBadge role="pm" />
+                  <div className="max-w-[85%] rounded-2xl px-4 py-2.5 text-sm bg-slate-700 text-slate-200 rounded-bl-sm leading-relaxed">
+                    <p>👋 Hi! I&apos;m your SiteDoc AI assistant. Here&apos;s what I can help you with:</p>
+                    <ul className="mt-2 space-y-1 text-slate-300">
+                      <li>🐛 <span className="font-medium">Bug fixes</span> — diagnose and fix errors, broken pages, or plugin conflicts</li>
+                      <li>⚡ <span className="font-medium">Performance</span> — speed up slow pages, optimise assets, fix Core Web Vitals</li>
+                      <li>🔒 <span className="font-medium">Security</span> — patch vulnerabilities, harden configs, clean malware</li>
+                      <li>🛠️ <span className="font-medium">New features</span> — build or modify functionality on your WordPress site</li>
+                      <li>⚙️ <span className="font-medium">Configuration</span> — server settings, caching, redirects, SSL, DNS</li>
+                    </ul>
+                    <p className="mt-2 text-slate-400">What can I help you with today?</p>
+                    <p className="text-[10px] mt-1 text-slate-500">
+                      {new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                    </p>
+                  </div>
+                </div>
+              )
             ) : (
               messages.map((msg) => {
                 if (msg.sender_type === 'system') {
