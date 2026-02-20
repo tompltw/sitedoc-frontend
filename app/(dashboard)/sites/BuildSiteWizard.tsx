@@ -119,7 +119,7 @@ export default function BuildSiteWizard({ onClose, onCreated }: BuildSiteWizardP
                     className="flex-1 bg-slate-900 border border-slate-600 rounded-l-lg px-3 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-blue-500"
                   />
                   <span className="bg-slate-700 border border-l-0 border-slate-600 rounded-r-lg px-3 py-2 text-slate-400 text-sm">
-                    .sitedoc.site
+                    .nkcreator.com
                   </span>
                 </div>
               </div>

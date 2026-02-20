@@ -1,0 +1,37 @@
+ ⨯ Failed to start server
+Error: listen EADDRINUSE: address already in use :::5001
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at /Users/tombui/workspace/projects/sitedoc/sitedoc-frontend/node_modules/next/dist/server/lib/start-server.js:280:16
+    at new Promise (<anonymous>)
+    at startServer (/Users/tombui/workspace/projects/sitedoc/sitedoc-frontend/node_modules/next/dist/server/lib/start-server.js:191:11)
+    at Module.nextStart (/Users/tombui/workspace/projects/sitedoc/sitedoc-frontend/node_modules/next/dist/cli/next-start.js:25:40)
+    at /Users/tombui/workspace/projects/sitedoc/sitedoc-frontend/node_modules/next/dist/bin/next:105:856 {
+  code: 'EADDRINUSE',
+  errno: -48,
+  syscall: 'listen',
+  address: '::',
+  port: 5001
+}
+  ▲ Next.js 14.2.35
+  - Local:        http://localhost:5001
+
+ ✓ Starting...
+ ✓ Ready in 129ms
+ ⨯ Failed to start server
+Error: listen EADDRINUSE: address already in use :::5001
+    at Server.setupListenHandle [as _listen2] (node:net:1940:16)
+    at listenInCluster (node:net:1997:12)
+    at Server.listen (node:net:2102:7)
+    at /Users/tombui/workspace/projects/sitedoc/sitedoc-frontend/node_modules/next/dist/server/lib/start-server.js:280:16
+    at new Promise (<anonymous>)
+    at startServer (/Users/tombui/workspace/projects/sitedoc/sitedoc-frontend/node_modules/next/dist/server/lib/start-server.js:191:11)
+    at Module.nextStart (/Users/tombui/workspace/projects/sitedoc/sitedoc-frontend/node_modules/next/dist/cli/next-start.js:25:40)
+    at /Users/tombui/workspace/projects/sitedoc/sitedoc-frontend/node_modules/next/dist/bin/next:105:856 {
+  code: 'EADDRINUSE',
+  errno: -48,
+  syscall: 'listen',
+  address: '::',
+  port: 5001
+}
