@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import api from '@/lib/api';
 import type { Site } from '@/types';
-import { Loader2, Globe, ExternalLink, Plus, Rocket, AlertTriangle, Settings } from 'lucide-react';
+import { Loader2, ExternalLink, Plus, Rocket, AlertTriangle, Settings, Link2, ArrowRight } from 'lucide-react';
 import AddSiteWizard from './AddSiteWizard';
 import BuildSiteWizard from './BuildSiteWizard';
 
@@ -114,23 +114,54 @@ export default function SitesPage() {
       </div>
 
       {sites.length === 0 ? (
-        <div className="bg-slate-800 border border-slate-700 rounded-xl p-10 text-center">
-          <Globe className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-          <p className="text-slate-400 text-sm mb-4">No sites yet. Get started below.</p>
-          <div className="flex items-center justify-center gap-3">
-            <button
-              onClick={() => setShowBuildWizard(true)}
-              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-medium text-sm px-5 py-2.5 rounded-lg transition"
-            >
-              <Rocket className="w-4 h-4" /> Build a new site
-            </button>
-            <button
-              onClick={() => setShowWizard(true)}
-              className="inline-flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white font-medium text-sm px-5 py-2.5 rounded-lg transition"
-            >
-              <Plus className="w-4 h-4" /> Add existing site
-            </button>
-          </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {/* Build new site card */}
+          <button
+            onClick={() => setShowBuildWizard(true)}
+            className="bg-slate-800 border border-slate-700 hover:border-blue-500 rounded-xl p-6 text-left transition group"
+          >
+            <div className="flex items-center gap-2.5 mb-3">
+              <div className="w-9 h-9 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                <Rocket className="w-5 h-5 text-blue-400" />
+              </div>
+              <h3 className="text-white font-semibold">Build a new site</h3>
+            </div>
+            <p className="text-slate-400 text-sm mb-4">
+              AI builds your WordPress site from scratch. We host it for you.
+            </p>
+            <ul className="space-y-1.5 text-sm text-slate-500 mb-5">
+              <li className="flex items-center gap-2"><span className="text-slate-600">•</span> Describe what you want</li>
+              <li className="flex items-center gap-2"><span className="text-slate-600">•</span> AI builds it in minutes</li>
+              <li className="flex items-center gap-2"><span className="text-slate-600">•</span> Hosted at slug.nkcreator.com</li>
+            </ul>
+            <span className="inline-flex items-center gap-1.5 text-blue-400 text-sm font-medium group-hover:gap-2.5 transition-all">
+              Get started <ArrowRight className="w-4 h-4" />
+            </span>
+          </button>
+
+          {/* Connect existing site card */}
+          <button
+            onClick={() => setShowWizard(true)}
+            className="bg-slate-800 border border-slate-700 hover:border-blue-500 rounded-xl p-6 text-left transition group"
+          >
+            <div className="flex items-center gap-2.5 mb-3">
+              <div className="w-9 h-9 rounded-lg bg-purple-500/10 flex items-center justify-center">
+                <Link2 className="w-5 h-5 text-purple-400" />
+              </div>
+              <h3 className="text-white font-semibold">Connect existing site</h3>
+            </div>
+            <p className="text-slate-400 text-sm mb-4">
+              Already have a WordPress site? Connect it and let AI maintain &amp; fix it.
+            </p>
+            <ul className="space-y-1.5 text-sm text-slate-500 mb-5">
+              <li className="flex items-center gap-2"><span className="text-slate-600">•</span> Provide your site URL</li>
+              <li className="flex items-center gap-2"><span className="text-slate-600">•</span> Add SSH or plugin access</li>
+              <li className="flex items-center gap-2"><span className="text-slate-600">•</span> AI monitors &amp; fixes issues</li>
+            </ul>
+            <span className="inline-flex items-center gap-1.5 text-purple-400 text-sm font-medium group-hover:gap-2.5 transition-all">
+              Connect site <ArrowRight className="w-4 h-4" />
+            </span>
+          </button>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -214,6 +245,25 @@ export default function SitesPage() {
               </div>
             </div>
           ))}
+
+          {/* Add site card at end of grid */}
+          <div className="bg-slate-800/50 border border-dashed border-slate-700 rounded-xl p-5 flex flex-col items-center justify-center gap-3 min-h-[200px]">
+            <p className="text-slate-500 text-xs font-medium uppercase tracking-wide">Add a site</p>
+            <div className="flex flex-col gap-2 w-full">
+              <button
+                onClick={() => setShowBuildWizard(true)}
+                className="flex items-center gap-2 justify-center w-full bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium px-3 py-2 rounded-lg transition"
+              >
+                <Rocket className="w-3.5 h-3.5" /> Build new site
+              </button>
+              <button
+                onClick={() => setShowWizard(true)}
+                className="flex items-center gap-2 justify-center w-full bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white text-xs font-medium px-3 py-2 rounded-lg transition"
+              >
+                <Link2 className="w-3.5 h-3.5" /> Connect existing site
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

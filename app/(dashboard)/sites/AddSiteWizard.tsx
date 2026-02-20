@@ -337,8 +337,8 @@ export default function AddSiteWizard({ onClose, onAdded }: Props) {
         {/* Header */}
         <div className="flex items-center justify-between px-6 pt-6 pb-4 border-b border-slate-800 sticky top-0 bg-slate-900 z-10">
           <div>
-            <h2 className="text-white font-semibold text-lg">Add a site</h2>
-            <p className="text-slate-400 text-xs mt-0.5">Connect your WordPress site to SiteDoc</p>
+            <h2 className="text-white font-semibold text-lg">Connect an existing site</h2>
+            <p className="text-slate-400 text-xs mt-0.5">Add your WordPress site so AI can maintain and fix it</p>
           </div>
           <button
             onClick={onClose}

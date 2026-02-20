@@ -61,8 +61,8 @@ export default function BuildSiteWizard({ onClose, onCreated }: BuildSiteWizardP
       });
       setResult(resp.data);
       setStep(3);
-    } catch (err: any) {
-      const detail = err?.response?.data?.detail || 'Failed to provision site.';
+    } catch (err: unknown) {
+      const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Failed to provision site.';
       setError(detail);
     } finally {
       setLoading(false);
@@ -74,9 +74,12 @@ export default function BuildSiteWizard({ onClose, onCreated }: BuildSiteWizardP
       <div className="bg-slate-800 border border-slate-700 rounded-2xl w-full max-w-lg mx-4 shadow-2xl">
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-slate-700">
-          <div className="flex items-center gap-2">
-            <Rocket className="w-5 h-5 text-blue-400" />
-            <h2 className="text-lg font-semibold text-white">Build a new site</h2>
+          <div>
+            <div className="flex items-center gap-2">
+              <Rocket className="w-5 h-5 text-blue-400" />
+              <h2 className="text-lg font-semibold text-white">Build a new site</h2>
+            </div>
+            <p className="text-slate-400 text-xs mt-1">AI builds and hosts your WordPress site at slug.nkcreator.com</p>
           </div>
           <button onClick={onClose} className="text-slate-400 hover:text-white transition">
             <X className="w-5 h-5" />
