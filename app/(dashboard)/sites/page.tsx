@@ -4,8 +4,9 @@ import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import api from '@/lib/api';
 import type { Site } from '@/types';
-import { Loader2, Globe, ExternalLink, Plus, AlertTriangle, Settings } from 'lucide-react';
+import { Loader2, Globe, ExternalLink, Plus, Rocket, AlertTriangle, Settings } from 'lucide-react';
 import AddSiteWizard from './AddSiteWizard';
+import BuildSiteWizard from './BuildSiteWizard';
 
 function StatusDot({ status }: { status: string }) {
   const colors: Record<string, string> = {
@@ -45,6 +46,7 @@ export default function SitesPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [showWizard, setShowWizard] = useState(false);
+  const [showBuildWizard, setShowBuildWizard] = useState(false);
 
   function loadSites() {
     setLoading(true);
@@ -81,6 +83,12 @@ export default function SitesPage() {
         onAdded={() => { setShowWizard(false); loadSites(); }}
       />
     )}
+    {showBuildWizard && (
+      <BuildSiteWizard
+        onClose={() => setShowBuildWizard(false)}
+        onCreated={() => { setShowBuildWizard(false); loadSites(); }}
+      />
+    )}
     <div className="space-y-5">
       <div className="flex items-center justify-between">
         <div>
@@ -89,24 +97,40 @@ export default function SitesPage() {
             {sites.length} site{sites.length !== 1 ? 's' : ''} monitored
           </p>
         </div>
-        <button
-          onClick={() => setShowWizard(true)}
-          className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-medium text-sm px-4 py-2 rounded-lg transition"
-        >
-          <Plus className="w-4 h-4" /> Add site
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowBuildWizard(true)}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-medium text-sm px-4 py-2 rounded-lg transition"
+          >
+            <Rocket className="w-4 h-4" /> Build new site
+          </button>
+          <button
+            onClick={() => setShowWizard(true)}
+            className="flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white font-medium text-sm px-4 py-2 rounded-lg transition"
+          >
+            <Plus className="w-4 h-4" /> Add existing site
+          </button>
+        </div>
       </div>
 
       {sites.length === 0 ? (
         <div className="bg-slate-800 border border-slate-700 rounded-xl p-10 text-center">
           <Globe className="w-10 h-10 text-slate-600 mx-auto mb-3" />
-          <p className="text-slate-400 text-sm mb-4">No sites connected yet.</p>
-          <button
-            onClick={() => setShowWizard(true)}
-            className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-medium text-sm px-5 py-2.5 rounded-lg transition"
-          >
-            <Plus className="w-4 h-4" /> Connect your first site
-          </button>
+          <p className="text-slate-400 text-sm mb-4">No sites yet. Get started below.</p>
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={() => setShowBuildWizard(true)}
+              className="inline-flex items-center gap-2 bg-blue-600 hover:bg-blue-500 text-white font-medium text-sm px-5 py-2.5 rounded-lg transition"
+            >
+              <Rocket className="w-4 h-4" /> Build a new site
+            </button>
+            <button
+              onClick={() => setShowWizard(true)}
+              className="inline-flex items-center gap-2 bg-slate-700 hover:bg-slate-600 text-slate-300 hover:text-white font-medium text-sm px-5 py-2.5 rounded-lg transition"
+            >
+              <Plus className="w-4 h-4" /> Add existing site
+            </button>
+          </div>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
@@ -120,6 +144,11 @@ export default function SitesPage() {
                 <div className="flex items-center gap-2.5 min-w-0">
                   <StatusDot status={site.status} />
                   <h2 className="text-white font-semibold text-sm truncate">{site.name}</h2>
+                  {site.is_managed && (
+                    <span className="flex-shrink-0 bg-blue-500/20 text-blue-400 text-[10px] font-medium px-1.5 py-0.5 rounded">
+                      Managed
+                    </span>
+                  )}
                 </div>
                 <a
                   href={site.url}

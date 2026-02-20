@@ -12,8 +12,14 @@ export interface Site {
   name: string;
   status: string;
   last_health_check: string | null;
+  is_managed: boolean;
+  slug: string | null;
+  custom_domain: string | null;
+  provisioned_at: string | null;
   created_at: string;
 }
+
+export type IssueType = 'maintenance' | 'site_build';
 
 export type KanbanColumn =
   | 'triage'
@@ -32,6 +38,7 @@ export interface Issue {
   customer_id: string;
   title: string;
   description: string;
+  issue_type: IssueType;
   status: 'open' | 'in_progress' | 'pending_approval' | 'resolved' | 'dismissed';
   priority: 'low' | 'medium' | 'high' | 'critical';
   confidence_score: number | null;
