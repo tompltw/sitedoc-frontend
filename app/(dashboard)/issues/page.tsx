@@ -279,6 +279,16 @@ function IssuesContent() {
     }).finally(() => setLoading(false));
   }, []);
 
+  // Poll for new issues every 5 seconds (catches PM-created tickets)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      api.get<Issue[]>('/api/v1/issues').then((res) => {
+        setIssues(res.data);
+      }).catch(() => {});
+    }, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
   const filtered = filterSite
     ? issues.filter(i => i.site_id === filterSite)
     : issues;
