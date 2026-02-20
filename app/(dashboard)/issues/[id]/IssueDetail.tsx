@@ -186,6 +186,8 @@ function PriorityBadge({ priority }: { priority: Issue['priority'] }) {
   );
 }
 
+// ActionStatusIcon kept for potential future use
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
 function ActionStatusIcon({ status }: { status: string }) {
   if (status === 'completed') return <CheckCircle className="w-4 h-4 text-green-400 flex-shrink-0" />;
   if (status === 'failed') return <XCircle className="w-4 h-4 text-red-400 flex-shrink-0" />;
@@ -222,7 +224,36 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
   const [uploadingFile, setUploadingFile] = useState(false);
   const [deletingAttachment, setDeletingAttachment] = useState<string | null>(null);
   const [attachmentError, setAttachmentError] = useState('');
+
+  // Agent activity tracking
+  const [agentStatus, setAgentStatus] = useState<{
+    active: boolean;
+    role: 'pm' | 'dev' | 'qa' | 'tech_lead' | null;
+    sessionKey: string | null;
+    lastActivity: Date | null;
+    status: 'idle' | 'working' | 'stalled';
+  }>({
+    active: false,
+    role: null,
+    sessionKey: null,
+    lastActivity: null,
+    status: 'idle',
+  });
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Periodic agent stall check (every 60s)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (agentStatus.active && agentStatus.lastActivity) {
+        const elapsed = Date.now() - agentStatus.lastActivity.getTime();
+        const STALL_THRESHOLD_MS = 45 * 60 * 1000; // 45 minutes
+        if (elapsed > STALL_THRESHOLD_MS) {
+          setAgentStatus((prev) => ({ ...prev, status: 'stalled' }));
+        }
+      }
+    }, 60000);
+    return () => clearInterval(interval);
+  }, [agentStatus.active, agentStatus.lastActivity]);
 
   // Fetch initial data — only clear loading on success so the spinner
   // keeps showing until polling or WS delivers data on failure.
@@ -238,6 +269,32 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
         setActions(actionsRes.data);
         setAttachments(attsRes.data);
         setLoadingInitial(false);
+
+        // Check if an agent is currently working (scan recent messages)
+        const recentAgentMsgs = msgsRes.data
+          .filter((m) => m.sender_type === 'agent' && m.agent_role)
+          .slice(-5); // last 5 agent messages
+
+        for (let i = recentAgentMsgs.length - 1; i >= 0; i--) {
+          const msg = recentAgentMsgs[i];
+          const sessionMatch = msg.content.match(/session: `([^`]+)`/);
+          
+          // If we find a "session:" message, agent started working
+          if (sessionMatch) {
+            setAgentStatus({
+              active: true,
+              role: msg.agent_role as 'pm' | 'dev' | 'qa' | 'tech_lead',
+              sessionKey: sessionMatch[1],
+              lastActivity: new Date(msg.created_at),
+              status: 'working',
+            });
+            break;
+          }
+          // If we hit a completion message first, agent is done
+          if (msg.content.includes('✅') || msg.content.includes('❌') || msg.content.match(/QA (PASSED|FAILED)/)) {
+            break;
+          }
+        }
       } catch {
         // Keep loadingInitial=true — polling or WS will deliver updates
       }
@@ -293,6 +350,45 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
             if (prev.find((m) => m.id === msg.id)) return prev;
             return [...prev, msg];
           });
+
+          // Track agent activity from chat messages
+          if (msg.sender_type === 'agent' && msg.agent_role) {
+            const role = msg.agent_role as 'pm' | 'dev' | 'qa' | 'tech_lead';
+            const sessionMatch = msg.content.match(/session: `([^`]+)`/);
+            
+            // Agent starting work (has session key in message)
+            if (sessionMatch) {
+              setAgentStatus({
+                active: true,
+                role,
+                sessionKey: sessionMatch[1],
+                lastActivity: new Date(),
+                status: 'working',
+              });
+            }
+            // Agent completed (success/failure indicators)
+            else if (msg.content.includes('✅') || msg.content.includes('❌') || msg.content.match(/QA (PASSED|FAILED)/)) {
+              setAgentStatus((prev) => ({
+                ...prev,
+                active: false,
+                status: 'idle',
+                lastActivity: new Date(),
+              }));
+              // Fetch fresh issue state — the ticket status changes at the same time
+              // the agent sends its completion message. This covers cases where the
+              // issue_updated WebSocket event is delayed or missed.
+              api.get<Issue>(`/api/v1/issues/${id}`)
+                .then((res) => setIssue(res.data))
+                .catch(() => {});
+            }
+            // Any other agent message = update activity timestamp
+            else if (agentStatus.active) {
+              setAgentStatus((prev) => ({
+                ...prev,
+                lastActivity: new Date(),
+              }));
+            }
+          }
         }
         break;
       }
@@ -379,17 +475,15 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // WebSocket connection
+  // WebSocket connection with auto-reconnect
   useEffect(() => {
-    const token = getToken();
-    if (!token) return;
-
-    // Build WS URL from the API base URL (swap http → ws)
     const apiBase = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:5000';
     const wsBase = apiBase.replace(/^http/, 'ws');
-    const wsUrl = `${wsBase}/ws/issues/${issue.id}?token=${token}`;
 
     let pollInterval: ReturnType<typeof setInterval> | null = null;
+    let reconnectTimeout: ReturnType<typeof setTimeout> | null = null;
+    let reconnectDelay = 1000; // start at 1s, back off to 30s
+    let destroyed = false;
 
     function startPolling() {
       if (pollInterval) return;
@@ -398,39 +492,61 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
           const res = await api.get<ChatMessage[]>(`/api/v1/issues/${issue.id}/messages`);
           setMessages(res.data);
           setLoadingInitial(false);
-          // Also refresh issue state
           const issueRes = await api.get(`/api/v1/issues/${issue.id}`);
           setIssue(issueRes.data);
         } catch { /* silent */ }
-      }, 5000);
+      }, 3000); // 3s poll while WS is down
     }
 
     function stopPolling() {
       if (pollInterval) { clearInterval(pollInterval); pollInterval = null; }
     }
 
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    function connect() {
+      if (destroyed) return;
+      const token = getToken();
+      if (!token) { startPolling(); return; }
 
-    ws.onopen = () => { stopPolling(); };
+      const wsUrl = `${wsBase}/ws/issues/${issue.id}?token=${token}`;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
 
-    ws.onmessage = (event: MessageEvent) => {
-      try {
-        const data: WsEvent = JSON.parse(event.data as string);
-        handleWsEvent(data);
-      } catch {
-        // Ignore parse errors
-      }
-    };
+      ws.onopen = () => {
+        stopPolling();
+        reconnectDelay = 1000; // reset backoff on successful connect
+      };
 
-    ws.onerror = () => { startPolling(); };
-    ws.onclose = () => { wsRef.current = null; startPolling(); };
+      ws.onmessage = (event: MessageEvent) => {
+        try {
+          const data: WsEvent = JSON.parse(event.data as string);
+          handleWsEvent(data);
+        } catch {
+          // Ignore parse errors
+        }
+      };
 
-    // Start polling immediately as fallback (WS will stop it if it connects)
+      ws.onerror = () => { startPolling(); };
+
+      ws.onclose = () => {
+        wsRef.current = null;
+        if (destroyed) return;
+        startPolling();
+        // Reconnect with exponential backoff (max 30s)
+        reconnectTimeout = setTimeout(() => {
+          reconnectDelay = Math.min(reconnectDelay * 2, 30000);
+          connect();
+        }, reconnectDelay);
+      };
+    }
+
+    // Start polling immediately, WS will stop it on connect
     startPolling();
+    connect();
 
     return () => {
-      ws.close();
+      destroyed = true;
+      if (wsRef.current) { wsRef.current.close(); wsRef.current = null; }
+      if (reconnectTimeout) clearTimeout(reconnectTimeout);
       stopPolling();
     };
   }, [issue.id, handleWsEvent]);
@@ -458,11 +574,7 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
     }
   }, [messages, isNearBottom]);
 
-  // Progress bar derived values
-  const completedActions = actions.filter((a) => a.status === 'completed').length;
-  const failedActions = actions.filter((a) => a.status === 'failed').length;
-  const totalActions = actions.length;
-  const showProgress = totalActions > 0 && (issue.status === 'in_progress' || completedActions > 0);
+  // (Fix Progress panel removed — actions data still tracked for WS updates)
 
   async function sendMessage(e: React.FormEvent) {
     e.preventDefault();
@@ -531,7 +643,7 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
   const kanban = issue.kanban_column ?? 'triage';
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4">
       {/* Diagnosis banner */}
       {diagnosisBanner && (
         <div className="flex items-center justify-between gap-3 bg-blue-500/10 border border-blue-500/30 text-blue-300 rounded-xl px-4 py-3 text-sm">
@@ -578,109 +690,313 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
         </div>
       )}
 
-      {/* Header */}
-      <div className="bg-slate-800 border border-slate-700 rounded-xl p-5">
-        {/* Back + ticket number */}
-        <div className="flex items-center justify-between mb-3">
-          <Link href="/issues" className="text-slate-500 hover:text-white text-xs transition flex items-center gap-1">
-            ← Back to Issues
-          </Link>
-          {issue.ticket_number && (
-            <span className="text-xs text-slate-500 font-mono bg-slate-700 px-2 py-1 rounded">
-              TKT-{String(issue.ticket_number).padStart(3, '0')}
-            </span>
-          )}
-        </div>
+      {/* Two-column layout: left = details, right = conversation */}
+      <div className="flex gap-6 items-start">
 
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="flex-1 min-w-0">
-            <h1 className="text-xl font-bold text-white truncate">{issue.title}</h1>
-            <p className="text-slate-400 text-sm mt-2 leading-relaxed">{issue.description}</p>
-            <div className="flex flex-wrap items-center gap-2 mt-3">
-              <KanbanBadge col={kanban} />
-              <PriorityBadge priority={issue.priority} />
-              {issue.confidence_score !== null && (
-                <span className="text-xs text-slate-400 bg-slate-700 border border-slate-600 px-2.5 py-1 rounded-full">
-                  Confidence: {(issue.confidence_score * 100).toFixed(0)}%
-                </span>
+        {/* ── LEFT COLUMN: Ticket Details ── */}
+        <div className="flex-1 min-w-0 space-y-4">
+
+          {/* Agent Activity Status */}
+          {agentStatus.active && (
+            <div className={`border rounded-xl p-4 ${
+              agentStatus.status === 'stalled' 
+                ? 'bg-orange-900/10 border-orange-600/30'
+                : 'bg-slate-800 border-blue-600/30'
+            }`}>
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <div className="flex items-center gap-2">
+                    {agentStatus.status === 'stalled' ? (
+                      <AlertCircle className="w-4 h-4 text-orange-400" />
+                    ) : (
+                      <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
+                    )}
+                    <span className="text-sm font-semibold text-white">
+                      {agentStatus.role === 'pm' && '🤖 PM Agent'}
+                      {agentStatus.role === 'dev' && '🔧 Dev Agent'}
+                      {agentStatus.role === 'qa' && '🧪 QA Agent'}
+                      {agentStatus.role === 'tech_lead' && '👨‍💼 Tech Lead'}
+                    </span>
+                  </div>
+                  {agentStatus.status === 'stalled' ? (
+                    <span className="text-xs text-orange-400 bg-orange-500/10 px-2 py-1 rounded">No activity detected</span>
+                  ) : (
+                    <span className="text-xs text-blue-400 bg-blue-500/10 px-2 py-1 rounded">Working</span>
+                  )}
+                </div>
+                {agentStatus.lastActivity && (
+                  <span className="text-xs text-slate-500">
+                    Last activity: {new Date(agentStatus.lastActivity).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                  </span>
+                )}
+              </div>
+              
+              {/* Current action */}
+              {(() => {
+                const inProgress = actions.filter((a) => a.status === 'in_progress');
+                const latest = inProgress.length > 0 ? inProgress[inProgress.length - 1] : actions[actions.length - 1];
+                return latest ? (
+                  <div className="mt-3 pt-3 border-t border-slate-700">
+                    <div className="flex items-start gap-2">
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs font-medium text-slate-300 mb-1">{latest.action_type}</div>
+                        <div className="text-xs text-slate-400 leading-relaxed">{latest.description}</div>
+                      </div>
+                      {latest.status === 'in_progress' && (
+                        <Loader2 className="w-3 h-3 text-blue-400 animate-spin flex-shrink-0 mt-0.5" />
+                      )}
+                    </div>
+                  </div>
+                ) : null;
+              })()}
+
+              {agentStatus.sessionKey && (
+                <div className="mt-2 text-xs text-slate-400 font-mono">
+                  Session: {agentStatus.sessionKey.slice(-12)}
+                </div>
               )}
-              {issue.dev_fail_count > 0 && (
-                <span className="text-xs text-red-400 bg-red-900/20 border border-red-600/30 px-2.5 py-1 rounded-full">
-                  {issue.dev_fail_count} fail{issue.dev_fail_count !== 1 ? 's' : ''}
+            </div>
+          )}
+
+          {/* Ticket header */}
+          <div className="bg-slate-800 border border-slate-700 rounded-xl p-5">
+            {/* Back + ticket number */}
+            <div className="flex items-center justify-between mb-3">
+              <Link href="/issues" className="text-slate-500 hover:text-white text-xs transition flex items-center gap-1">
+                ← Back to Issues
+              </Link>
+              {issue.ticket_number && (
+                <span className="text-xs text-slate-500 font-mono bg-slate-700 px-2 py-1 rounded">
+                  TKT-{String(issue.ticket_number).padStart(3, '0')}
                 </span>
               )}
             </div>
 
-            {/* Pipeline progress bar */}
-            <PipelineProgress col={kanban} />
-          </div>
+            <div className="flex flex-wrap items-start justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <h1 className="text-xl font-bold text-white">{issue.title}</h1>
+                <p className="text-slate-400 text-sm mt-2 leading-relaxed">{issue.description}</p>
+                <div className="flex flex-wrap items-center gap-2 mt-3">
+                  <KanbanBadge col={kanban} />
+                  <PriorityBadge priority={issue.priority} />
+                  {issue.confidence_score !== null && (
+                    <span className="text-xs text-slate-400 bg-slate-700 border border-slate-600 px-2.5 py-1 rounded-full">
+                      Confidence: {(issue.confidence_score * 100).toFixed(0)}%
+                    </span>
+                  )}
+                  {issue.dev_fail_count > 0 && (
+                    <span className="text-xs text-red-400 bg-red-900/20 border border-red-600/30 px-2.5 py-1 rounded-full">
+                      {issue.dev_fail_count} fail{issue.dev_fail_count !== 1 ? 's' : ''}
+                    </span>
+                  )}
+                </div>
 
-          {/* Contextual customer action buttons */}
-          <div className="flex flex-col gap-2 flex-shrink-0">
-            {kanban === 'ready_for_uat_approval' && (
-              <button
-                onClick={() => transition('todo')}
-                disabled={transitioning}
-                className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
-              >
-                {transitioning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
-                Approve &amp; Start Work
-              </button>
-            )}
-            {kanban === 'ready_for_uat' && (
-              <>
-                <button
-                  onClick={() => transition('done')}
-                  disabled={transitioning}
-                  className="flex items-center gap-2 bg-green-600 hover:bg-green-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
-                >
-                  {transitioning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ThumbsUp className="w-4 h-4" />}
-                  UAT Pass — Looks Good
-                </button>
-                <button
-                  onClick={() => transition('todo', 'UAT failed — customer rejected')}
-                  disabled={transitioning}
-                  className="flex items-center gap-2 bg-red-600 hover:bg-red-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
-                >
-                  {transitioning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ThumbsDown className="w-4 h-4" />}
-                  UAT Fail — Still Broken
-                </button>
-              </>
-            )}
-            {/* Legacy approve/reject (pending_approval status) */}
-            {showApproveReject && kanban !== 'ready_for_uat' && (
-              <div className="flex gap-2">
-                <button
-                  onClick={approveFix}
-                  disabled={approvingFix || rejectingFix}
-                  className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
-                >
-                  {approvingFix && <Loader2 className="w-4 h-4 animate-spin" />}
-                  Approve Fix
-                </button>
-                <button
-                  onClick={rejectFix}
-                  disabled={approvingFix || rejectingFix}
-                  className="flex items-center gap-2 bg-red-600 hover:bg-red-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
-                >
-                  {rejectingFix && <Loader2 className="w-4 h-4 animate-spin" />}
-                  Reject
-                </button>
+                {/* Pipeline progress bar */}
+                <PipelineProgress col={kanban} />
+              </div>
+
+              {/* Contextual customer action buttons */}
+              <div className="flex flex-col gap-2 flex-shrink-0">
+                {kanban === 'ready_for_uat_approval' && (
+                  <button
+                    onClick={() => transition('todo')}
+                    disabled={transitioning}
+                    className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
+                  >
+                    {transitioning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ArrowRight className="w-4 h-4" />}
+                    Approve &amp; Start Work
+                  </button>
+                )}
+                {kanban === 'ready_for_uat' && (
+                  <>
+                    <button
+                      onClick={() => transition('done')}
+                      disabled={transitioning}
+                      className="flex items-center gap-2 bg-green-600 hover:bg-green-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
+                    >
+                      {transitioning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ThumbsUp className="w-4 h-4" />}
+                      UAT Pass — Looks Good
+                    </button>
+                    <button
+                      onClick={() => transition('todo', 'UAT failed — customer rejected')}
+                      disabled={transitioning}
+                      className="flex items-center gap-2 bg-red-600 hover:bg-red-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
+                    >
+                      {transitioning ? <Loader2 className="w-4 h-4 animate-spin" /> : <ThumbsDown className="w-4 h-4" />}
+                      UAT Fail — Still Broken
+                    </button>
+                  </>
+                )}
+                {showApproveReject && kanban !== 'ready_for_uat' && (
+                  <div className="flex gap-2">
+                    <button
+                      onClick={approveFix}
+                      disabled={approvingFix || rejectingFix}
+                      className="flex items-center gap-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
+                    >
+                      {approvingFix && <Loader2 className="w-4 h-4 animate-spin" />}
+                      Approve Fix
+                    </button>
+                    <button
+                      onClick={rejectFix}
+                      disabled={approvingFix || rejectingFix}
+                      className="flex items-center gap-2 bg-red-600 hover:bg-red-500 disabled:opacity-60 text-white text-sm font-semibold px-4 py-2 rounded-lg transition"
+                    >
+                      {rejectingFix && <Loader2 className="w-4 h-4 animate-spin" />}
+                      Reject
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+
+            {actionError && (
+              <div className="mt-3 text-sm text-red-400 bg-red-900/20 border border-red-700 rounded-lg px-4 py-2">
+                {actionError}
               </div>
             )}
           </div>
+
+          {/* Attachments panel */}
+          <div className="bg-slate-800 border border-slate-700 rounded-xl">
+            <button
+              onClick={() => setAttachmentsOpen((v) => !v)}
+              className="w-full px-5 py-3.5 flex items-center justify-between hover:bg-slate-700/30 rounded-xl transition"
+            >
+              <div className="flex items-center gap-2">
+                <Paperclip className="w-4 h-4 text-slate-400" />
+                <h2 className="text-white font-semibold text-sm">Attachments</h2>
+                {attachments.length > 0 && (
+                  <span className="bg-blue-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
+                    {attachments.length}
+                  </span>
+                )}
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
+                  disabled={uploadingFile}
+                  className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white bg-slate-700 hover:bg-slate-600 px-2.5 py-1 rounded-lg transition disabled:opacity-50"
+                  title="Upload file"
+                >
+                  {uploadingFile ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Upload className="w-3.5 h-3.5" />
+                  )}
+                  {uploadingFile ? 'Uploading…' : 'Upload'}
+                </button>
+                {attachmentsOpen ? (
+                  <ChevronDown className="w-4 h-4 text-slate-500" />
+                ) : (
+                  <ChevronRight className="w-4 h-4 text-slate-500" />
+                )}
+              </div>
+            </button>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              className="hidden"
+              onChange={handleFileUpload}
+              accept="*/*"
+            />
+
+            {attachmentsOpen && (
+              <div className="px-5 pb-4 border-t border-slate-700">
+                {attachmentError && (
+                  <div className="mt-3 text-xs text-red-400 bg-red-900/20 border border-red-700/40 rounded-lg px-3 py-2">
+                    {attachmentError}
+                  </div>
+                )}
+                {attachments.length === 0 ? (
+                  <p className="text-slate-500 text-sm text-center py-6">
+                    No attachments yet.{' '}
+                    <button
+                      onClick={() => fileInputRef.current?.click()}
+                      className="text-blue-400 hover:text-blue-300 underline transition"
+                    >
+                      Upload a file
+                    </button>
+                  </p>
+                ) : (
+                  <ul className="mt-3 space-y-2">
+                    {attachments.map((att) => (
+                      <li
+                        key={att.id}
+                        className="flex items-center gap-3 bg-slate-700/40 rounded-lg px-3 py-2.5 group"
+                      >
+                        <Paperclip className="w-4 h-4 text-slate-500 flex-shrink-0" />
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm text-slate-200 truncate">{att.filename}</p>
+                          <p className="text-xs text-slate-500 mt-0.5">
+                            {formatBytes(att.size_bytes)}
+                            {att.mime_type ? ` · ${att.mime_type}` : ''}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-1 flex-shrink-0">
+                          <a
+                            href={`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:5000'}${att.download_url}`}
+                            download={att.filename}
+                            className="p-1.5 text-slate-400 hover:text-white rounded transition"
+                            title="Download"
+                          >
+                            <Download className="w-4 h-4" />
+                          </a>
+                          <button
+                            onClick={() => handleDeleteAttachment(att.id)}
+                            disabled={deletingAttachment === att.id}
+                            className="p-1.5 text-slate-500 hover:text-red-400 rounded transition disabled:opacity-50"
+                            title="Delete"
+                          >
+                            {deletingAttachment === att.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-4 h-4" />
+                            )}
+                          </button>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* Metadata */}
+          <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 text-sm">
+            <h3 className="text-slate-400 font-medium text-xs uppercase tracking-wide mb-3">
+              Details
+            </h3>
+            <dl className="grid grid-cols-2 gap-4">
+              <div>
+                <dt className="text-slate-500 text-xs">Issue ID</dt>
+                <dd className="text-slate-200 font-mono text-xs mt-0.5 truncate">{issue.id}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500 text-xs">Site ID</dt>
+                <dd className="text-slate-200 font-mono text-xs mt-0.5 truncate">{issue.site_id}</dd>
+              </div>
+              <div>
+                <dt className="text-slate-500 text-xs">Created</dt>
+                <dd className="text-slate-200 text-xs mt-0.5">
+                  {new Date(issue.created_at).toLocaleString()}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-slate-500 text-xs">Resolved</dt>
+                <dd className="text-slate-200 text-xs mt-0.5">
+                  {issue.resolved_at ? new Date(issue.resolved_at).toLocaleString() : '—'}
+                </dd>
+              </div>
+            </dl>
+          </div>
+
         </div>
 
-        {actionError && (
-          <div className="mt-3 text-sm text-red-400 bg-red-900/20 border border-red-700 rounded-lg px-4 py-2">
-            {actionError}
-          </div>
-        )}
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Chat */}
-        <div className="bg-slate-800 border border-slate-700 rounded-xl flex flex-col h-[520px]">
+        {/* ── RIGHT COLUMN: Conversation ── */}
+        <div className="w-[420px] flex-shrink-0 bg-slate-800 border border-slate-700 rounded-xl flex flex-col sticky top-4" style={{ height: 'calc(100vh - 120px)', minHeight: '560px' }}>
           <div className="px-5 py-3.5 border-b border-slate-700 flex-shrink-0 flex items-center justify-between">
             <h2 className="text-white font-semibold text-sm">Conversation</h2>
             <AgentStatusIndicator issue={issue} actions={actions} />
@@ -806,244 +1122,6 @@ export default function IssueDetail({ issue: initialIssue }: Props) {
           </form>
         </div>
 
-        {/* Agent Actions */}
-        <div className="bg-slate-800 border border-slate-700 rounded-xl flex flex-col h-[520px]">
-          <div className="px-5 py-3.5 border-b border-slate-700 flex-shrink-0">
-            <div className="flex items-center justify-between">
-              <h2 className="text-white font-semibold text-sm">Fix Progress</h2>
-              {totalActions > 0 && (
-                <span className="text-xs text-slate-400">
-                  {completedActions}/{totalActions} steps
-                  {failedActions > 0 && (
-                    <span className="text-red-400 ml-1">({failedActions} failed)</span>
-                  )}
-                </span>
-              )}
-            </div>
-
-            {/* Progress bar */}
-            {showProgress && (
-              <div className="mt-2.5">
-                <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all duration-500 ${
-                      failedActions > 0 ? 'bg-red-500' : 'bg-blue-500'
-                    }`}
-                    style={{
-                      width: `${totalActions > 0 ? (completedActions / totalActions) * 100 : 0}%`,
-                    }}
-                  />
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="flex-1 overflow-y-auto p-4">
-            {loadingInitial ? (
-              <div className="flex items-center justify-center h-full">
-                <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
-              </div>
-            ) : actions.length === 0 ? (
-              <p className="text-slate-500 text-sm text-center py-8">
-                No agent actions yet. The AI agent will act here once analysis begins.
-              </p>
-            ) : (
-              <ul className="space-y-3">
-                {actions.map((action, idx) => (
-                  <li
-                    key={action.id}
-                    className={`flex items-start gap-3 rounded-lg p-3 transition-colors ${
-                      action.status === 'in_progress'
-                        ? 'bg-blue-500/10 border border-blue-600/20'
-                        : action.status === 'completed'
-                        ? 'bg-green-500/5 border border-green-600/10'
-                        : action.status === 'failed'
-                        ? 'bg-red-500/10 border border-red-600/20'
-                        : 'bg-slate-700/40'
-                    }`}
-                  >
-                    {/* Step number */}
-                    <span className="text-xs text-slate-500 font-mono w-5 flex-shrink-0 mt-0.5">
-                      {String(idx + 1).padStart(2, '0')}
-                    </span>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <ActionStatusIcon status={action.status} />
-                        <span className="text-xs font-medium text-slate-300 truncate">
-                          {action.action_type}
-                        </span>
-                      </div>
-                      <p className="text-xs text-slate-400 mt-1 leading-relaxed">
-                        {action.description}
-                      </p>
-                      {action.status === 'failed' && action.error_detail && (
-                        <p className="text-xs text-red-400 mt-1 leading-relaxed">
-                          {action.error_detail}
-                        </p>
-                      )}
-                    </div>
-                    <span
-                      className={`text-[10px] font-medium flex-shrink-0 ${
-                        action.status === 'completed'
-                          ? 'text-green-400'
-                          : action.status === 'failed'
-                          ? 'text-red-400'
-                          : action.status === 'in_progress'
-                          ? 'text-blue-400'
-                          : 'text-yellow-400'
-                      }`}
-                    >
-                      {action.status.replace('_', ' ')}
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        </div>
-      </div>
-
-      {/* Attachments panel */}
-      <div className="bg-slate-800 border border-slate-700 rounded-xl">
-        {/* Header */}
-        <button
-          onClick={() => setAttachmentsOpen((v) => !v)}
-          className="w-full px-5 py-3.5 flex items-center justify-between hover:bg-slate-700/30 rounded-xl transition"
-        >
-          <div className="flex items-center gap-2">
-            <Paperclip className="w-4 h-4 text-slate-400" />
-            <h2 className="text-white font-semibold text-sm">Attachments</h2>
-            {attachments.length > 0 && (
-              <span className="bg-blue-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full min-w-[18px] text-center">
-                {attachments.length}
-              </span>
-            )}
-          </div>
-          <div className="flex items-center gap-2">
-            {/* Upload button inside header */}
-            <button
-              onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }}
-              disabled={uploadingFile}
-              className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-white bg-slate-700 hover:bg-slate-600 px-2.5 py-1 rounded-lg transition disabled:opacity-50"
-              title="Upload file"
-            >
-              {uploadingFile ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Upload className="w-3.5 h-3.5" />
-              )}
-              {uploadingFile ? 'Uploading…' : 'Upload'}
-            </button>
-            {attachmentsOpen ? (
-              <ChevronDown className="w-4 h-4 text-slate-500" />
-            ) : (
-              <ChevronRight className="w-4 h-4 text-slate-500" />
-            )}
-          </div>
-        </button>
-
-        {/* Hidden file input */}
-        <input
-          ref={fileInputRef}
-          type="file"
-          className="hidden"
-          onChange={handleFileUpload}
-          accept="*/*"
-        />
-
-        {/* Body */}
-        {attachmentsOpen && (
-          <div className="px-5 pb-4 border-t border-slate-700">
-            {attachmentError && (
-              <div className="mt-3 text-xs text-red-400 bg-red-900/20 border border-red-700/40 rounded-lg px-3 py-2">
-                {attachmentError}
-              </div>
-            )}
-
-            {attachments.length === 0 ? (
-              <p className="text-slate-500 text-sm text-center py-6">
-                No attachments yet.{' '}
-                <button
-                  onClick={() => fileInputRef.current?.click()}
-                  className="text-blue-400 hover:text-blue-300 underline transition"
-                >
-                  Upload a file
-                </button>
-              </p>
-            ) : (
-              <ul className="mt-3 space-y-2">
-                {attachments.map((att) => (
-                  <li
-                    key={att.id}
-                    className="flex items-center gap-3 bg-slate-700/40 rounded-lg px-3 py-2.5 group"
-                  >
-                    <Paperclip className="w-4 h-4 text-slate-500 flex-shrink-0" />
-                    <div className="flex-1 min-w-0">
-                      <p className="text-sm text-slate-200 truncate">{att.filename}</p>
-                      <p className="text-xs text-slate-500 mt-0.5">
-                        {formatBytes(att.size_bytes)}
-                        {att.mime_type ? ` · ${att.mime_type}` : ''}
-                      </p>
-                    </div>
-                    <div className="flex items-center gap-1 flex-shrink-0">
-                      {/* Download */}
-                      <a
-                        href={`${process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:5000'}${att.download_url}`}
-                        download={att.filename}
-                        className="p-1.5 text-slate-400 hover:text-white rounded transition"
-                        title="Download"
-                      >
-                        <Download className="w-4 h-4" />
-                      </a>
-                      {/* Delete */}
-                      <button
-                        onClick={() => handleDeleteAttachment(att.id)}
-                        disabled={deletingAttachment === att.id}
-                        className="p-1.5 text-slate-500 hover:text-red-400 rounded transition disabled:opacity-50"
-                        title="Delete"
-                      >
-                        {deletingAttachment === att.id ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Trash2 className="w-4 h-4" />
-                        )}
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-      </div>
-
-      {/* Metadata */}
-      <div className="bg-slate-800 border border-slate-700 rounded-xl p-5 text-sm">
-        <h3 className="text-slate-400 font-medium text-xs uppercase tracking-wide mb-3">
-          Details
-        </h3>
-        <dl className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div>
-            <dt className="text-slate-500 text-xs">Issue ID</dt>
-            <dd className="text-slate-200 font-mono text-xs mt-0.5 truncate">{issue.id}</dd>
-          </div>
-          <div>
-            <dt className="text-slate-500 text-xs">Site ID</dt>
-            <dd className="text-slate-200 font-mono text-xs mt-0.5 truncate">{issue.site_id}</dd>
-          </div>
-          <div>
-            <dt className="text-slate-500 text-xs">Created</dt>
-            <dd className="text-slate-200 text-xs mt-0.5">
-              {new Date(issue.created_at).toLocaleString()}
-            </dd>
-          </div>
-          <div>
-            <dt className="text-slate-500 text-xs">Resolved</dt>
-            <dd className="text-slate-200 text-xs mt-0.5">
-              {issue.resolved_at ? new Date(issue.resolved_at).toLocaleString() : '—'}
-            </dd>
-          </div>
-        </dl>
       </div>
     </div>
   );
