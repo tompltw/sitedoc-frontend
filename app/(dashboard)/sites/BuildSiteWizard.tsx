@@ -1,8 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import api from '@/lib/api';
-import { X, Rocket, Loader2 } from 'lucide-react';
+import { X, Rocket, Loader2, LayoutTemplate, Sparkles } from 'lucide-react';
 
 const BUSINESS_TYPES = [
   'Restaurant',
@@ -18,6 +18,14 @@ const BUSINESS_TYPES = [
   'Other',
 ];
 
+interface Template {
+  id: string;
+  name: string;
+  description: string;
+  business_types: string[];
+  pages: string[];
+}
+
 interface BuildSiteWizardProps {
   onClose: () => void;
   onCreated: () => void;
@@ -28,14 +36,38 @@ export default function BuildSiteWizard({ onClose, onCreated }: BuildSiteWizardP
   const [name, setName] = useState('');
   const [slug, setSlug] = useState('');
   const [businessType, setBusinessType] = useState('');
+  const [templateId, setTemplateId] = useState<string | null>(null);
   const [description, setDescription] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState<{ url: string; site_id: string; issue_id?: string } | null>(null);
+  const [templates, setTemplates] = useState<Template[]>([]);
+  const [templatesLoading, setTemplatesLoading] = useState(false);
+
+  // Fetch templates when entering step 2
+  useEffect(() => {
+    if (step === 2 && templates.length === 0) {
+      setTemplatesLoading(true);
+      api.get('/api/v1/templates')
+        .then((resp) => {
+          setTemplates(resp.data.templates || []);
+          // Auto-select matching template if businessType is set
+          if (businessType) {
+            const match = (resp.data.templates || []).find((t: Template) =>
+              t.business_types.includes(businessType)
+            );
+            if (match && templateId === null) {
+              setTemplateId(match.id);
+            }
+          }
+        })
+        .catch(() => {})
+        .finally(() => setTemplatesLoading(false));
+    }
+  }, [step]);
 
   function handleNameChange(val: string) {
     setName(val);
-    // Auto-generate slug from name
     const generated = val
       .toLowerCase()
       .replace(/[^a-z0-9]+/g, '-')
@@ -58,9 +90,10 @@ export default function BuildSiteWizard({ onClose, onCreated }: BuildSiteWizardP
         slug: slug.trim(),
         business_type: businessType || undefined,
         description: description.trim() || undefined,
+        template_id: templateId || undefined,
       });
       setResult(resp.data);
-      setStep(3);
+      setStep(4);
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail || 'Failed to provision site.';
       setError(detail);
@@ -68,6 +101,13 @@ export default function BuildSiteWizard({ onClose, onCreated }: BuildSiteWizardP
       setLoading(false);
     }
   }
+
+  // Sort templates: matching business type first, then generic
+  const sortedTemplates = [...templates].sort((a, b) => {
+    const aMatch = businessType && a.business_types.includes(businessType) ? 0 : 1;
+    const bMatch = businessType && b.business_types.includes(businessType) ? 0 : 1;
+    return aMatch - bMatch;
+  });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -84,6 +124,28 @@ export default function BuildSiteWizard({ onClose, onCreated }: BuildSiteWizardP
           <button onClick={onClose} className="text-slate-400 hover:text-white transition">
             <X className="w-5 h-5" />
           </button>
+        </div>
+
+        {/* Step indicator */}
+        <div className="px-6 pt-4 flex items-center gap-2">
+          {[1, 2, 3].map((s) => (
+            <div key={s} className="flex items-center gap-2">
+              <div className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium transition ${
+                step >= s + (step === 4 ? -3 : 0) // map step 4 (success) to show all complete
+                  ? step > s || step === 4 ? 'bg-blue-600 text-white' : 'bg-blue-600 text-white ring-2 ring-blue-400'
+                  : 'bg-slate-700 text-slate-400'
+              }`}>
+                {s}
+              </div>
+              {s < 3 && <div className={`w-8 h-0.5 ${step > s ? 'bg-blue-600' : 'bg-slate-700'}`} />}
+            </div>
+          ))}
+          <span className="text-xs text-slate-500 ml-2">
+            {step === 1 && 'Basics'}
+            {step === 2 && 'Template'}
+            {step === 3 && 'Description'}
+            {step === 4 && 'Done!'}
+          </span>
         </div>
 
         <div className="px-6 py-5 space-y-4">
@@ -160,8 +222,96 @@ export default function BuildSiteWizard({ onClose, onCreated }: BuildSiteWizardP
             </>
           )}
 
-          {/* Step 2: Description */}
+          {/* Step 2: Choose template */}
           {step === 2 && (
+            <>
+              <div>
+                <label className="block text-sm font-medium text-slate-300 mb-1.5">
+                  Choose a starter template
+                </label>
+                <p className="text-xs text-slate-500 mb-3">
+                  Pick a design to start with. Our AI will customize the content based on your description.
+                </p>
+
+                {templatesLoading ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="w-5 h-5 animate-spin text-slate-400" />
+                  </div>
+                ) : (
+                  <div className="space-y-2 max-h-64 overflow-y-auto pr-1">
+                    {/* Start from scratch option */}
+                    <button
+                      onClick={() => setTemplateId(null)}
+                      className={`w-full text-left p-3 rounded-lg border transition ${
+                        templateId === null
+                          ? 'border-blue-500 bg-blue-500/10'
+                          : 'border-slate-600 bg-slate-900 hover:border-slate-500'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2">
+                        <Sparkles className="w-4 h-4 text-slate-400 shrink-0" />
+                        <div>
+                          <p className="text-sm font-medium text-white">Start from scratch</p>
+                          <p className="text-xs text-slate-400">AI builds everything from your description — maximum flexibility.</p>
+                        </div>
+                      </div>
+                    </button>
+
+                    {sortedTemplates.map((tmpl) => {
+                      const isMatch = businessType && tmpl.business_types.includes(businessType);
+                      return (
+                        <button
+                          key={tmpl.id}
+                          onClick={() => setTemplateId(tmpl.id)}
+                          className={`w-full text-left p-3 rounded-lg border transition ${
+                            templateId === tmpl.id
+                              ? 'border-blue-500 bg-blue-500/10'
+                              : 'border-slate-600 bg-slate-900 hover:border-slate-500'
+                          }`}
+                        >
+                          <div className="flex items-start gap-2">
+                            <LayoutTemplate className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <p className="text-sm font-medium text-white">{tmpl.name}</p>
+                                {isMatch && (
+                                  <span className="text-[10px] bg-blue-500/20 text-blue-400 px-1.5 py-0.5 rounded-full font-medium">
+                                    Recommended
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-slate-400 mt-0.5">{tmpl.description}</p>
+                              <p className="text-[10px] text-slate-500 mt-1">
+                                Pages: {tmpl.pages.join(', ')}
+                              </p>
+                            </div>
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-2 flex justify-between">
+                <button
+                  onClick={() => setStep(1)}
+                  className="text-slate-400 hover:text-white text-sm transition"
+                >
+                  Back
+                </button>
+                <button
+                  onClick={() => setStep(3)}
+                  className="bg-blue-600 hover:bg-blue-500 text-white font-medium text-sm px-5 py-2 rounded-lg transition"
+                >
+                  Next
+                </button>
+              </div>
+            </>
+          )}
+
+          {/* Step 3: Description */}
+          {step === 3 && (
             <>
               <div>
                 <label className="block text-sm font-medium text-slate-300 mb-1.5">
@@ -175,13 +325,15 @@ export default function BuildSiteWizard({ onClose, onCreated }: BuildSiteWizardP
                   className="w-full bg-slate-900 border border-slate-600 rounded-lg px-3 py-2 text-white text-sm placeholder-slate-500 focus:outline-none focus:border-blue-500 resize-none"
                 />
                 <p className="text-xs text-slate-500 mt-1">
-                  Our AI will build your site based on this. You can always refine later.
+                  {templateId
+                    ? 'Our AI will customize the template based on this description.'
+                    : 'Our AI will build your site based on this. You can always refine later.'}
                 </p>
               </div>
 
               <div className="pt-2 flex justify-between">
                 <button
-                  onClick={() => setStep(1)}
+                  onClick={() => setStep(2)}
                   className="text-slate-400 hover:text-white text-sm transition"
                 >
                   Back
@@ -207,8 +359,8 @@ export default function BuildSiteWizard({ onClose, onCreated }: BuildSiteWizardP
             </>
           )}
 
-          {/* Step 3: Success */}
-          {step === 3 && result && (
+          {/* Step 4: Success */}
+          {step === 4 && result && (
             <div className="text-center py-4">
               <div className="w-12 h-12 bg-green-500/20 rounded-full flex items-center justify-center mx-auto mb-4">
                 <Rocket className="w-6 h-6 text-green-400" />
